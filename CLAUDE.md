@@ -17,6 +17,11 @@ SendSpin Server ──WebSocket──► SendSpinClient ──► SyncAudioPlaye
 
 ## Key Components
 
+### Modules
+- `:shared` - Kotlin Multiplatform: protocol, Noise, pairing, transports, clock filter
+- `:player` - Android library: `SendSpin`, `SyncAudioPlayer`, decoders, `InboundConnections`, `NsdAdvertiser`. No UI and no app settings; it reaches the app only through `SendSpinHost`
+- `:app` - UI, `PlaybackService`, `UserSettings` and `AppSendSpinHost`
+
 ### SendSpinClient (`sendspin/SendSpinClient.kt`)
 - WebSocket connection via OkHttp
 - Protocol parsing (JSON + binary)

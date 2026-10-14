@@ -42,6 +42,7 @@ import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
+import com.sendspindroid.AppSendSpinHost
 import com.sendspindroid.MainActivity
 
 import com.sendspindroid.SyncOffsetPreference
@@ -1093,7 +1094,7 @@ class PlaybackService : MediaLibraryService() {
 
     /** A client for one connection a server opens to us. Not on the main thread. */
     private fun newInboundClient(): SendSpin =
-        SendSpin(UserSettings.getPlayerName(), SendSpinClientCallback()).also { client ->
+        SendSpin(UserSettings.getPlayerName(), SendSpinClientCallback(), AppSendSpinHost).also { client ->
             val am = audioManager ?: return@also
             val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
             val percent = ((am.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / max) * 100).toInt()
@@ -1214,7 +1215,8 @@ class PlaybackService : MediaLibraryService() {
             val playerName = com.sendspindroid.UserSettings.getPlayerName()
             dialClient = SendSpin(
                 deviceName = playerName,
-                callback = SendSpinClientCallback()
+                callback = SendSpinClientCallback(),
+                host = AppSendSpinHost,
             )
             sendSpinClient = dialClient
             sendSpinPlayer?.setSendSpinClient(sendSpinClient)

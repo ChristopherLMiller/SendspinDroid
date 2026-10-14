@@ -177,6 +177,9 @@ dependencies {
     // Shared KMP module
     implementation(project(":shared"))
 
+    // The player: protocol client, sync audio output, decoders
+    implementation(project(":player"))
+
     // Kotlinx Serialization JSON - used for protocol message parsing in :app
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.0")
 

@@ -282,6 +282,7 @@ class AddServerWizardActivity : AppCompatActivity() {
         val transient = SendSpin(
             deviceName = android.os.Build.MODEL,
             callback = noopSendSpinCallback,
+            host = com.sendspindroid.AppSendSpinHost,
         )
         transient.connect(SendSpinEndpoint.Local(address))
         return try {
