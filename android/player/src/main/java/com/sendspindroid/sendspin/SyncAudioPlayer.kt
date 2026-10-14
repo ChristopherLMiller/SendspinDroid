@@ -222,12 +222,6 @@ class SyncAudioPlayer(
         // Buffer configuration
         private const val BUFFER_SIZE_MULTIPLIER = 4  // Multiplier for minimum buffer size
 
-        // Sync error Kalman filter parameters
-        // AudioTimestamp jitter is about +/-0.65ms peak; the process noise gives
-        // the estimate a time constant of about a second.
-        private const val SYNC_ERROR_MEASUREMENT_NOISE_US = 400L
-        private const val SYNC_ERROR_PROCESS_STD_DEV = 0.085
-
         // An AudioTimestamp older than this means the track has stalled (underrun)
         private const val TIMESTAMP_MAX_AGE_US = 100_000L
 
@@ -306,8 +300,7 @@ class SyncAudioPlayer(
     // at normal priority leaves it vulnerable to background CPU throttling:
     // display-pipeline suspend / big.LITTLE migration / thermal DVFS can delay
     // the coroutine past AudioTrack's DAC deadline, causing underruns and
-    // phantom sync drift that the corrector then chases with ±4% rate
-    // adjustments (audible pitch warble).
+    // phantom sync drift that the corrector then chases.
     //
     // A HandlerThread constructed with THREAD_PRIORITY_URGENT_AUDIO stays on
     // the audio-class cpuset across foreground/background transitions, which
@@ -427,11 +420,7 @@ class SyncAudioPlayer(
     @Volatile private var muteReasons: Set<MuteReason> = emptySet()
 
     // 2D Kalman filter for sync error smoothing (tracks offset + drift)
-    // Based on Python reference implementation for optimal noise filtering
-    private val syncErrorFilter = SyncErrorFilter(
-        processStdDev = SYNC_ERROR_PROCESS_STD_DEV,
-        measurementNoiseUs = SYNC_ERROR_MEASUREMENT_NOISE_US
-    )
+    private val syncErrorFilter = SyncErrorFilter.forDacSyncError()
 
     // Sample insert/drop correction state
     private val correctionFrames = maxOf(1, ((CORRECTION_STEP_US * sampleRate + 500_000) / 1_000_000).toInt())
@@ -706,7 +695,11 @@ class SyncAudioPlayer(
     enum class MuteReason {
         /** The player's `muted` state (server or user); the only one reported in client/state. */
         PLAYER,
-        /** The client is reporting `state="error"` and must mute until it is back in sync. */
+        /**
+         * The clock filter has lost the convergence it had: muted until it is
+         * back, while the audio keeps draining in sync. A local policy; the
+         * spec has no state for it.
+         */
         SYNC,
         /** Another app has the audio output (focus loss or output disconnect). */
         INTERRUPTION,

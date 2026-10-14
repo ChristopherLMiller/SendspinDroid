@@ -455,7 +455,7 @@ object UserSettings {
      * Whether Low Memory Mode is enabled.
      * When enabled:
      * - Album artwork is not fetched (uses placeholder)
-     * - Audio buffer is reduced from 32MB to 8MB
+     * - The audio buffer is about 10 s instead of 35 s (buffer_capacity and the decoded queue)
      * - Coil ImageLoader is not initialized
      * Use when controlling playback from the server and UI isn't needed.
      */

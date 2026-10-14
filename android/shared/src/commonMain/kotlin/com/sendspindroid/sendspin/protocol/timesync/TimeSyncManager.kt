@@ -180,7 +180,7 @@ class TimeSyncManager(
         timeFilter.addMeasurement(measurement.offset, maxError, measurement.clientReceived)
 
         if (timeFilter.isReady) {
-            Log.v(tag, "Time sync: offset=${timeFilter.offsetMicros}μs, error=${timeFilter.errorMicros}μs")
+            Log.v(tag, "Time sync: offset=${timeFilter.offsetMicros}us, error=${timeFilter.errorMicros}us")
         }
 
         onMeasurementApplied()
@@ -255,12 +255,12 @@ class TimeSyncManager(
             val staleCount = pendingBurstMeasurements.size - validMeasurements.size
             Log.v(tag, "Time sync burst: ${validMeasurements.size}/$currentBurstCount responses" +
                     (if (staleCount > 0) " ($staleCount stale rejected)" else "") +
-                    ", best RTT=${best.rtt}μs, offset=${best.offset}μs")
+                    ", best RTT=${best.rtt}us, offset=${best.offset}us")
 
             val accepted = timeFilter.addMeasurement(best.offset, maxError, best.clientReceived)
 
             if (timeFilter.isReady) {
-                Log.v(tag, "Time sync: offset=${timeFilter.offsetMicros}μs, error=${timeFilter.errorMicros}μs, " +
+                Log.v(tag, "Time sync: offset=${timeFilter.offsetMicros}us, error=${timeFilter.errorMicros}us, " +
                         "drift=${"%.3f".format(timeFilter.driftPpm)}ppm" +
                         if (!accepted) " [rejected]" else "")
             }

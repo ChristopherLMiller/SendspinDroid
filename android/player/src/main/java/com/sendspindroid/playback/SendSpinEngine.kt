@@ -343,7 +343,7 @@ class SendSpinEngine(
         }
     }
 
-    /** The client reports `state="error"` while out of sync, and mutes until it is back. */
+    /** The clock filter lost its convergence (or regained it): mute (or un-mute) for sync. */
     fun onSyncMuteChanged(muted: Boolean) {
         scope.launch {
             retiredPlayers.forEach { it.setMuted(SyncAudioPlayer.MuteReason.SYNC, muted) }

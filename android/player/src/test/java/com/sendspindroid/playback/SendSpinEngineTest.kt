@@ -84,6 +84,31 @@ class SendSpinEngineTest {
     }
 
     @Test
+    fun `a stream start sets up its codec's decoder and a player in its format`() {
+        val decoder = mockk<AudioDecoder>(relaxed = true)
+        every { AudioDecoderFactory.create("flac") } returns decoder
+        val header = byteArrayOf(1, 2, 3)
+
+        engine.onStreamStart("flac", 44_100, 2, 24, header)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        verify { decoder.configure(44_100, 2, 24, header) }
+        assertTrue(players.single().matchesFormat(44_100, 2, 24))
+    }
+
+    @Test
+    fun `a codec that cannot be set up drops the stream's audio, never plays it raw`() {
+        every { AudioDecoderFactory.create("flac") } throws IllegalArgumentException("no FLAC decoder")
+
+        engine.onStreamStart("flac", 48_000, 2, 16, null)
+        dispatcher.scheduler.advanceUntilIdle()
+        engine.onAudioChunk(1_000L, ByteArray(16))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        verify(exactly = 0) { players.single().queueChunk(any(), any(), any()) }
+    }
+
+    @Test
     fun `a stream start that repeats the active format keeps the player`() {
         startStream()
         startStream()

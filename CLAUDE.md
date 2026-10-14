@@ -9,7 +9,7 @@ SendSpinDroid is a native Kotlin Android client for SendSpin. It acts as a **Pla
 SendSpinDroid is a **synchronized audio player** that connects to SendSpin servers:
 
 ```
-SendSpin Server ──WebSocket──► SendSpinClient ──► SyncAudioPlayer (AudioTrack) ──► Audio Output
+SendSpin Server ──WebSocket──► SendSpin ──► SendSpinEngine ──► SyncAudioPlayer (AudioTrack) ──► Audio Output
                     │
                     ├── JSON messages (metadata, state)
                     └── Binary messages (timestamped audio PCM)
@@ -22,11 +22,11 @@ SendSpin Server ──WebSocket──► SendSpinClient ──► SyncAudioPlaye
 - `:player` - Android library: `SendSpin`, `SendSpinEngine` (the decode pipeline and its player), `SyncAudioPlayer`, decoders, `InboundConnections`, `NsdAdvertiser`. No UI and no app settings; it reaches the app only through `SendSpinHost` and the engine's constructor. Its R8 rules are in `player/consumer-rules.pro`
 - `:app` - UI, `PlaybackService`, `UserSettings` and `AppSendSpinHost`
 
-### SendSpinClient (`sendspin/SendSpinClient.kt`)
-- WebSocket connection via OkHttp
-- Protocol parsing (JSON + binary)
-- Clock synchronization
-- Audio buffering with timestamps
+### SendSpin (`player/.../sendspin/SendSpin.kt`)
+- WebSocket connection via Ktor, dialled or accepted (`InboundConnections`), Noise-encrypted
+- Protocol parsing (JSON + binary), in `SendSpinProtocolHandler`
+- Clock synchronization (`TimeSyncManager`, `SendspinTimeFilter`)
+- Hands stream events and audio chunks to `SendSpinEngine`, which decodes them for `SyncAudioPlayer`
 
 ### PlaybackService (`playback/PlaybackService.kt`)
 - Android MediaLibraryService for background playback
@@ -51,7 +51,8 @@ transport message. After decryption, byte 0 is the message ID:
          (flags bit 1 = first, bit 0 = last)
   2-3:   Reserved
   4:     Audio chunk
-  8-11:  Artwork channels 0-3 (announce/part/cancel; only channel 0 is declared)
+  8-11:  Artwork channels 0-3 (announce/part/cancel; channel 0 album art and
+         channel 1 the artist image are declared)
   16-23: Visualizer (not claimed)
 
 Audio chunk (13-byte header):
@@ -64,7 +65,8 @@ Bytes 13+:   Encoded audio frame
 ### Audio Format
 - 48kHz sample rate
 - 16-bit, 24-bit, or 32-bit signed PCM (negotiated via client hello)
-- Stereo (2 channels) or Mono (1 channel)
+- Stereo (2 channels): only stereo is advertised, as a change of channel count
+  needs a new AudioTrack and so cannot be gapless
 - Audio sample data is little-endian; header timestamps are big-endian
 
 ### Client State (`client/state`)
