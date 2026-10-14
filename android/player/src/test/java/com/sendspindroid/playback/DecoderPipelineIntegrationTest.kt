@@ -392,9 +392,10 @@ class DecoderPipelineIntegrationTest {
     }
 
     // =========================================================================
-    // Test 6: release() releases the decoder exactly once, after pending
-    // chunks have been processed. It sends a final Release through the
-    // channel and closes it.
+    // Test 6: release() releases the decoder exactly once. The chunks are
+    // drained first: release() blocks this thread, so the test scheduler
+    // cannot run the worker during its wait, and the release here comes
+    // from the cancelled worker's finally.
     // =========================================================================
 
     @Test

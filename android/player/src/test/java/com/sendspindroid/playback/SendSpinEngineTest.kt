@@ -99,11 +99,13 @@ class SendSpinEngineTest {
     }
 
     @Test
-    fun `a voice mute set between streams applies to the next player`() {
+    fun `voice and interruption mutes set between streams apply to the next player`() {
         engine.setMuted(MuteReason.VOICE, true)
+        engine.setMuted(MuteReason.INTERRUPTION, true)
         startStream()
 
         verify { players[0].setMuted(MuteReason.VOICE, true) }
+        verify { players[0].setMuted(MuteReason.INTERRUPTION, true) }
 
         engine.setMuted(MuteReason.VOICE, false)
         verify { players[0].setMuted(MuteReason.VOICE, false) }

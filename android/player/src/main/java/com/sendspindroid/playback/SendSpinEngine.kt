@@ -41,6 +41,7 @@ class SendSpinEngine(
     private val lowMemoryMode: () -> Boolean,
     /** The saved `muted` state. Read when a player is created. */
     private val playerMuted: () -> Boolean,
+    /** Ordered with the host's own main-thread posts: pass one built on the host's Handler. */
     private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
     // Decode worker: single-thread-equivalent coroutine that owns the
     // decoder for its lifetime. See

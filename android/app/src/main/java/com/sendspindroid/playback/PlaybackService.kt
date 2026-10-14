@@ -85,6 +85,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -154,6 +155,10 @@ class PlaybackService : MediaLibraryService() {
         },
         lowMemoryMode = { UserSettings.lowMemoryMode },
         playerMuted = { UserSettings.getPlayerMuted() },
+        // Synchronous messages, as mainHandler posts: Dispatchers.Main posts
+        // asynchronous ones, which overtake mainHandler's (onStateChanged's
+        // pause, say) while a frame barrier is pending.
+        mainDispatcher = Handler(Looper.getMainLooper()).asCoroutineDispatcher(),
     )
 
     // Active server as a flow, consumed by ConnectionCoordinator.
