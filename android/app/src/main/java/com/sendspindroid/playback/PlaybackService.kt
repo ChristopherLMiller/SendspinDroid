@@ -712,7 +712,12 @@ class PlaybackService : MediaLibraryService() {
                     }
                     is com.sendspindroid.coordinator.NetworkEvent.LinkAddressesChanged -> {
                         Log.i(TAG, "networkEvent: LinkAddressesChanged")
-                        sendSpinClient?.onNetworkChanged()
+                        // The connection survives an address change on its
+                        // network, and so does its clock estimate: resetting
+                        // it here silenced a playing group for seconds and
+                        // dropped the queued audio. A change that does break
+                        // the path closes the socket, and the reconnect
+                        // starts the clock over.
                         browseDiscoveryManager?.refreshMulticastLockIfActive()
                         advertiseAgainAfterNetworkChange()
                     }

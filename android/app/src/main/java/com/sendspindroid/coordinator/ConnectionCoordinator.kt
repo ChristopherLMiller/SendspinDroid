@@ -6,7 +6,6 @@ import android.net.LinkAddress
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.util.Log
 import com.sendspindroid.model.ConnectionType
 import com.sendspindroid.model.UnifiedServer
@@ -43,16 +42,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 sealed class NetworkEvent {
     /**
-     * The active network's identity changed (different [networkHandle]).
+     * The default network's identity changed (different [networkHandle]).
      * Indicates a transport handover (e.g., WiFi -> Cellular). The reconnect
      * loop should re-attempt the local connection on the new network.
      */
     data class IdentityChanged(val networkHandle: Long) : NetworkEvent()
 
     /**
-     * Link addresses changed on the active network without an identity change.
-     * Indicates a DHCP renewal or IPv4/IPv6 stack change. RTT baseline should
-     * be dropped and multicast locks refreshed.
+     * An address was added to or removed from the default network without an
+     * identity change: a DHCP renewal, or an IPv6 temporary address rotating.
+     * A connection open on another address carries on; what depends on the
+     * address set (multicast lock, NSD advertisement) is refreshed.
      */
     data class LinkAddressesChanged(val addresses: Set<LinkAddress>) : NetworkEvent()
 }
@@ -121,7 +121,7 @@ class ConnectionCoordinator(
 
     // Network callback state -- all written exclusively from binder/callback threads.
     @Volatile private var lastNetworkHandle: Long = -1L
-    @Volatile private var lastLinkAddresses: Set<LinkAddress>? = null
+    @Volatile private var lastLinkAddresses: Set<Pair<java.net.InetAddress, Int>>? = null
     @Volatile private var lastValidatedState: Boolean? = null
     private var validationLossJob: Job? = null
 
@@ -210,8 +210,11 @@ class ConnectionCoordinator(
             // Only care about changes on the currently-active network.
             if (network.networkHandle != lastNetworkHandle) return
 
+            // Address and prefix only: LinkAddress equality also compares flags
+            // and lifetimes, which change on every router advertisement.
+            val addresses = linkProperties.linkAddresses.toSet()
             val prev = lastLinkAddresses
-            val current = linkProperties.linkAddresses.toSet()
+            val current = addresses.map { it.address to it.prefixLength }.toSet()
             lastLinkAddresses = current
 
             // First callback after onAvailable establishes the baseline -- no action.
@@ -220,18 +223,18 @@ class ConnectionCoordinator(
             if (prev == current) return
 
             Log.i(TAG, "Link addresses changed on active network: $prev -> $current")
-            scope.launch { _networkEvents.emit(NetworkEvent.LinkAddressesChanged(current)) }
+            scope.launch { _networkEvents.emit(NetworkEvent.LinkAddressesChanged(addresses)) }
         }
     }
 
     init {
         val cm = connectivityManager
         if (cm != null) {
-            val request = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
+            // The default network only: a callback for every network with
+            // internet would see a cellular network kept up in the background
+            // while on Wi-Fi, and treat its comings and goings as a handover.
             try {
-                cm.registerNetworkCallback(request, networkCallback)
+                cm.registerDefaultNetworkCallback(networkCallback)
                 Log.d(TAG, "Network callback registered")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to register network callback", e)
