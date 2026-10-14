@@ -1,8 +1,11 @@
 package com.sendspindroid.playback
 
+import android.media.AudioDeviceInfo
+import com.sendspindroid.playback.VolumeLaw.OutputChange
 import kotlin.math.abs
 import kotlin.math.log10
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -77,5 +80,59 @@ class VolumeLawTest {
             val volume = VolumeLaw.volumeFor(index, dbAt)
             assertEquals("index $index -> volume $volume", index, VolumeLaw.indexFor(volume, maxIndex, dbAt))
         }
+    }
+
+    @Test
+    fun `an index held at max when less was asked is a full-volume output`() {
+        assertTrue(VolumeLaw.isFullVolumeOutput(asked = 8, applied = maxIndex, maxIndex = maxIndex))
+        // Max asked for and set
+        assertFalse(VolumeLaw.isFullVolumeOutput(asked = maxIndex, applied = maxIndex, maxIndex = maxIndex))
+        // The safe media volume warning holds the index below what was asked
+        assertFalse(VolumeLaw.isFullVolumeOutput(asked = 13, applied = 10, maxIndex = maxIndex))
+        // Volume 0 mutes, which reads back as index 0
+        assertFalse(VolumeLaw.isFullVolumeOutput(asked = 0, applied = 0, maxIndex = maxIndex))
+    }
+
+    @Test
+    fun `a fixed-volume output keeps its volume whatever outputs come or go`() {
+        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(true, maxIndex, maxIndex, HDMI, HDMI))
+        // Media moved there from a variable output
+        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(true, maxIndex, 8, HDMI, A2DP))
+    }
+
+    @Test
+    fun `a sink that leaves media where it was changes nothing`() {
+        assertEquals(OutputChange.NONE, VolumeLaw.outputChange(false, 8, 8, SPEAKER, SPEAKER))
+        // Full-volume HDMI: the index stays at max
+        assertEquals(OutputChange.NONE, VolumeLaw.outputChange(false, maxIndex, maxIndex, HDMI, HDMI))
+    }
+
+    @Test
+    fun `media on another output or index takes that device volume`() {
+        assertEquals(OutputChange.DEVICE_VOLUME, VolumeLaw.outputChange(false, 5, 8, SPEAKER, SPEAKER))
+        // Same index, other curve
+        assertEquals(OutputChange.DEVICE_VOLUME, VolumeLaw.outputChange(false, 8, 8, A2DP, SPEAKER))
+    }
+
+    @Test
+    fun `below API 33 media goes to the output AudioPolicy routes it to`() {
+        val earpiece = AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+        assertEquals(SPEAKER, VolumeLaw.mediaOutputType(listOf(earpiece, SPEAKER)))
+        assertEquals(SPEAKER, VolumeLaw.mediaOutputType(emptyList()))
+        val wired = AudioDeviceInfo.TYPE_WIRED_HEADPHONES
+        assertEquals(wired, VolumeLaw.mediaOutputType(listOf(earpiece, SPEAKER, wired)))
+        // A hands-free car kit (SCO only) carries no media
+        assertEquals(SPEAKER, VolumeLaw.mediaOutputType(listOf(SPEAKER, AudioDeviceInfo.TYPE_BLUETOOTH_SCO)))
+        // Android 9 and 10 put A2DP ahead of wired outputs, and both ahead of HDMI
+        assertEquals(A2DP, VolumeLaw.mediaOutputType(listOf(SPEAKER, AudioDeviceInfo.TYPE_WIRED_HEADSET, A2DP)))
+        val usb = AudioDeviceInfo.TYPE_USB_HEADSET
+        assertEquals(usb, VolumeLaw.mediaOutputType(listOf(SPEAKER, HDMI, usb)))
+        assertEquals(HDMI, VolumeLaw.mediaOutputType(listOf(SPEAKER, HDMI)))
+    }
+
+    private companion object {
+        const val SPEAKER = AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        const val A2DP = AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+        const val HDMI = AudioDeviceInfo.TYPE_HDMI
     }
 }

@@ -362,6 +362,7 @@ class PlaybackService : MediaLibraryService() {
     private var volumeObserver: ContentObserver? = null
     private var volumeObserverRegistered: Boolean = false  // Track registration state to prevent leaks
     private var lastKnownVolume: Int = -1  // Track to detect external volume changes
+    private var lastOutputType: Int? = null  // The output lastKnownVolume was set or synced on
 
     // Audio focus management - required for Android Auto to hand over audio output
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -1060,6 +1061,7 @@ class PlaybackService : MediaLibraryService() {
 
         // Track current volume to detect external changes
         lastKnownVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
+        lastOutputType = audioManager?.let { mediaOutputType(it) }
 
         // Initialize playback state with actual device volume (not default 100%)
         val volumePercent = audioManager?.let { deviceVolumePercent(it, lastKnownVolume) } ?: 0
@@ -1932,8 +1934,8 @@ class PlaybackService : MediaLibraryService() {
      * Volume stays on the device's media stream so the hardware keys work.
      * The spec asks for `amplitude = (volume / 100)^1.5` (roles/player/v1.md),
      * so the index is picked from the device's own curve and the rest is gain
-     * on the track ([VolumeLaw]). On a fixed-volume output the whole of it is
-     * track gain.
+     * on the track ([VolumeLaw]). On a fixed-volume or full-volume output the
+     * whole of it is track gain.
      *
      * Main thread only.
      *
@@ -1954,7 +1956,8 @@ class PlaybackService : MediaLibraryService() {
         }
 
         val maxVolume = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val curve = deviceVolumeCurve(am)
+        val output = mediaOutputType(am)
+        val curve = deviceVolumeCurve(am, output)
         val newVolume = if (curve != null) {
             VolumeLaw.indexFor(percent, maxVolume, curve)
         } else {
@@ -1962,23 +1965,36 @@ class PlaybackService : MediaLibraryService() {
             // for a volume above 0.
             (volume * maxVolume).roundToInt().coerceIn(if (percent > 0) 1 else 0, maxVolume)
         }
-        engine.setTrackGain(curve?.let { VolumeLaw.trackGainFor(percent, newVolume, it) } ?: 1f)
 
         Log.d(TAG, "Setting device volume: $newVolume/$maxVolume (volume $percent)")
 
         // Update tracking to prevent echo in observer
         lastKnownVolume = newVolume
+        lastOutputType = output
 
         // Set device volume (no flags = silent, no UI popup)
         am.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
         Log.i(TAG, "[cmd-trace] T4 setStreamVolume ts=${System.nanoTime() / 1_000_000} thread=${Thread.currentThread().name} new=$newVolume max=$maxVolume")
 
-        // The platform can hold the index below what was asked (the safe
-        // media volume warning): report what actually plays.
+        // The track gain goes with the index that plays, so it is set once
+        // the index is read back.
         val applied = am.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (applied != newVolume) {
-            Log.w(TAG, "Device volume held at $applied, asked for $newVolume")
-            syncDeviceVolumeToServer(applied)
+        when {
+            applied == newVolume ->
+                engine.setTrackGain(curve?.let { VolumeLaw.trackGainFor(percent, newVolume, it) } ?: 1f)
+            VolumeLaw.isFullVolumeOutput(newVolume, applied, maxVolume) -> {
+                // The index stays at max: the whole volume is track gain, as
+                // on a fixed-volume output, and the volume asked for plays.
+                Log.d(TAG, "Full-volume output: volume $percent as track gain")
+                lastKnownVolume = applied
+                engine.setTrackGain(VolumeLaw.amplitude(percent))
+            }
+            else -> {
+                // The platform holds the index below what was asked (the safe
+                // media volume warning): report what actually plays.
+                Log.w(TAG, "Device volume held at $applied, asked for $newVolume")
+                syncDeviceVolumeToServer(applied)
+            }
         }
     }
 
@@ -1989,17 +2005,27 @@ class PlaybackService : MediaLibraryService() {
         .build()
 
     /**
+     * The type of the output media plays on: the routed one from API 33,
+     * below that the one AudioPolicy picks for media of those connected
+     * ([VolumeLaw.mediaOutputType]).
+     */
+    private fun mediaOutputType(am: AudioManager): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            am.getAudioDevicesForAttributes(mediaAttributes).firstOrNull()?.type
+                ?: android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        } else {
+            VolumeLaw.mediaOutputType(am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).map { it.type })
+        }
+
+    /**
      * The device's own gain in dB at each STREAM_MUSIC index, on the output
      * media plays on now; null where the platform cannot say (below API 28).
-     * Below API 33 the output is assumed to be the speaker.
+     * On an absolute-volume output (most Bluetooth A2DP and LE audio, HDMI
+     * with CEC) the sink applies its own curve to the index, and this one
+     * only stands in for it.
      */
-    private fun deviceVolumeCurve(am: AudioManager): ((Int) -> Double)? {
+    private fun deviceVolumeCurve(am: AudioManager, deviceType: Int = mediaOutputType(am)): ((Int) -> Double)? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
-        val deviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            am.getAudioDevicesForAttributes(mediaAttributes).firstOrNull()?.type
-        } else {
-            null
-        } ?: android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
         return try {
             val min = am.getStreamMinVolume(AudioManager.STREAM_MUSIC)
             val table = (0..am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)).map { index ->
@@ -2051,7 +2077,7 @@ class PlaybackService : MediaLibraryService() {
         broadcastSessionExtras()
     }
 
-    /** Media moved to another output: its index and its curve are new. */
+    /** Media may have moved to another output, with its own index and curve. */
     private val outputDeviceCallback = object : android.media.AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>) {
             if (addedDevices.any { it.isSink }) scheduleOutputVolumeSync()
@@ -2062,10 +2088,24 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    // Routing settles a moment after the device callback
+    // Routing settles a moment after the device callback. Any sink counts
+    // there, so the volume is touched only when what plays changed.
     private val outputVolumeSync = Runnable {
         val am = audioManager ?: return@Runnable
-        syncDeviceVolumeToServer(am.getStreamVolume(AudioManager.STREAM_MUSIC))
+        val index = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val output = mediaOutputType(am)
+        when (VolumeLaw.outputChange(am.isVolumeFixed, index, lastKnownVolume, output, lastOutputType)) {
+            VolumeLaw.OutputChange.KEEP_VOLUME -> {
+                lastKnownVolume = index
+                lastOutputType = output
+                setVolume(_playbackState.value.volume / 100f)
+            }
+            VolumeLaw.OutputChange.NONE -> Unit
+            VolumeLaw.OutputChange.DEVICE_VOLUME -> {
+                lastOutputType = output
+                syncDeviceVolumeToServer(index)
+            }
+        }
     }
 
     private fun scheduleOutputVolumeSync() {

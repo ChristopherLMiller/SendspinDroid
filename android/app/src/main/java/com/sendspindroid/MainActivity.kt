@@ -8,9 +8,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
 import androidx.preference.PreferenceManager
-import android.database.ContentObserver
-import android.media.AudioManager
-import android.provider.Settings
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
@@ -145,12 +142,6 @@ class MainActivity : AppCompatActivity() {
 
     // Charging state receiver for adaptive ping intervals
     private var chargingReceiver: BroadcastReceiver? = null
-
-    // Volume control - uses device STREAM_MUSIC (Spotify-style)
-    private val audioManager by lazy {
-        getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    }
-    private var volumeObserver: ContentObserver? = null
 
     // Android TV detection - used for D-pad navigation and remote control handling
     private val isTvDevice: Boolean by lazy {
@@ -476,10 +467,6 @@ class MainActivity : AppCompatActivity() {
         // and network-loss snackbars (replaces the deleted ConnectivityManager.NetworkCallback).
         observeNetworkState()
 
-        // Volume slider - controls device STREAM_MUSIC (Spotify-style)
-        // Initialize slider to current device volume
-        syncSliderWithDeviceVolume()
-
         // Start with server list view and begin discovery in background
         showServerListView()
     }
@@ -655,14 +642,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        registerVolumeObserver()
         // Notify pinger of foreground state for adaptive intervals
         defaultServerPinger?.onForegroundChanged(true)
     }
 
     override fun onStop() {
         super.onStop()
-        unregisterVolumeObserver()
         // Notify pinger of background state for adaptive intervals
         defaultServerPinger?.onForegroundChanged(false)
     }
@@ -682,8 +667,8 @@ class MainActivity : AppCompatActivity() {
         updateKeepScreenOn(mediaController?.isPlaying == true)
         // Re-sync UI state with MediaController
         syncUIWithPlayerState()
-        // Re-sync volume slider with device volume (may have changed while in background)
-        syncSliderWithDeviceVolume()
+        // Re-sync volume slider with the service's volume
+        syncSliderWithServiceVolume()
     }
 
     /**
@@ -878,8 +863,8 @@ class MainActivity : AppCompatActivity() {
         discoveryManager?.stopDiscovery()
         defaultServerPinger?.stop()
 
-        // Sync volume slider with current device volume
-        syncSliderWithDeviceVolume()
+        // Sync volume slider with the service's volume
+        syncSliderWithServiceVolume()
     }
 
     /**
@@ -1817,20 +1802,15 @@ class MainActivity : AppCompatActivity() {
     /**
      * Handles volume slider changes.
      *
-     * Sets device STREAM_MUSIC volume directly (Spotify-style) AND syncs to server
-     * via PlaybackService custom command for multi-client coordination.
+     * Sends the volume to PlaybackService, which owns the device STREAM_MUSIC
+     * index: it picks the index and the track gain for the volume and reports
+     * it to the server.
      *
      * @param volume Normalized volume from 0.0 to 1.0
      */
     private fun onVolumeChanged(volume: Float) {
         Log.d(TAG, "Volume changed: $volume")
 
-        // Set device volume directly (Spotify-style)
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val newVolume = (volume * maxVolume).roundToInt().coerceIn(0, maxVolume)
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, newVolume, 0)
-
-        // Also notify PlaybackService to sync to server (for multi-client coordination)
         val controller = mediaController ?: return
         val args = Bundle().apply {
             putFloat(PlaybackService.ARG_VOLUME, volume)
@@ -1840,52 +1820,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Syncs the volume slider with the current device STREAM_MUSIC volume.
-     * Called on startup and when returning from background.
+     * Syncs the volume slider with the volume PlaybackService publishes.
+     * The device index is not a volume on its own (the service adds track
+     * gain to it), and a hardware-key change reaches the slider through the
+     * service's session extras.
      */
-    private fun syncSliderWithDeviceVolume() {
-        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        // Whole percent, truncated
-        val sliderValue = ((currentVolume.toFloat() / maxVolume) * 100).toInt().toFloat()
-
-        // Sync Compose UI (now playing Compose slider)
-        viewModel.updateVolume(sliderValue / 100f)
-
-        Log.d(TAG, "Synced slider with device volume: $currentVolume/$maxVolume ($sliderValue%)")
-    }
-
-    /**
-     * Registers a ContentObserver to detect device volume changes from hardware buttons.
-     * This keeps the UI slider in sync when user presses hardware volume buttons.
-     */
-    private fun registerVolumeObserver() {
-        if (volumeObserver != null) return  // Already registered
-
-        volumeObserver = object : ContentObserver(handler) {
-            override fun onChange(selfChange: Boolean) {
-                // Sync slider to device volume when hardware buttons are pressed
-                syncSliderWithDeviceVolume()
-            }
-        }
-
-        contentResolver.registerContentObserver(
-            Settings.System.CONTENT_URI,
-            true,
-            volumeObserver!!
-        )
-        Log.d(TAG, "Volume observer registered")
-    }
-
-    /**
-     * Unregisters the volume ContentObserver.
-     */
-    private fun unregisterVolumeObserver() {
-        volumeObserver?.let {
-            contentResolver.unregisterContentObserver(it)
-            volumeObserver = null
-            Log.d(TAG, "Volume observer unregistered")
-        }
+    private fun syncSliderWithServiceVolume() {
+        val volume = mediaController?.sessionExtras?.getInt(PlaybackService.EXTRA_VOLUME, -1) ?: -1
+        if (volume in 0..100) viewModel.updateVolume(volume / 100f)
     }
 
     /**

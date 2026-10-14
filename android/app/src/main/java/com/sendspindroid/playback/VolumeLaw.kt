@@ -1,5 +1,6 @@
 package com.sendspindroid.playback
 
+import android.media.AudioDeviceInfo
 import kotlin.math.floor
 import kotlin.math.log10
 import kotlin.math.pow
@@ -51,6 +52,67 @@ internal object VolumeLaw {
         if (db == Double.NEGATIVE_INFINITY) return 0
         return floor(100 * 10.0.pow(db / 30.0) + 1e-9).toInt().coerceIn(1, 100)
     }
+
+    /**
+     * Whether the index read back as [applied] after asking for [asked] marks
+     * a full-volume output (HDMI with CEC, HDMI ARC/eARC): the platform keeps
+     * its index at [maxIndex] whatever is asked, and AudioManager.isVolumeFixed
+     * does not report it. The safe media volume warning never reads back like
+     * this: it only refuses a raise above its safe index, and holds the index
+     * at or below that index while it is active.
+     */
+    fun isFullVolumeOutput(asked: Int, applied: Int, maxIndex: Int): Boolean =
+        applied == maxIndex && asked < maxIndex
+
+    /** What a change in the outputs connected means for the volume ([outputChange]). */
+    enum class OutputChange {
+        /** A fixed-volume output: there is no index, the track gain is the whole volume. */
+        KEEP_VOLUME,
+
+        /** Media plays on the same output at the same index: nothing that plays changed. */
+        NONE,
+
+        /** Media moved to an output with its own stored index and curve. */
+        DEVICE_VOLUME,
+    }
+
+    /**
+     * What to do once outputs were connected or removed, from the STREAM_MUSIC
+     * [index] and the [output] media plays on now, against the ones the volume
+     * was last set or synced for.
+     */
+    fun outputChange(volumeFixed: Boolean, index: Int, lastIndex: Int, output: Int?, lastOutput: Int?): OutputChange =
+        when {
+            volumeFixed -> OutputChange.KEEP_VOLUME
+            index == lastIndex && output == lastOutput -> OutputChange.NONE
+            else -> OutputChange.DEVICE_VOLUME
+        }
+
+    /**
+     * The output media plays on, of the [outputs] connected (AudioDeviceInfo
+     * types), where the platform cannot be asked (below API 33): AudioPolicy's
+     * order for media on Android 9 and 10 (enginedefault Engine.cpp,
+     * STRATEGY_MEDIA). Android 11 and 12 route to whichever removable output
+     * was connected last instead, so with two connected this can pick the
+     * other one; the volume curve only differs by category (headset, speaker,
+     * external media), which most of them share.
+     */
+    fun mediaOutputType(outputs: Collection<Int>): Int =
+        MEDIA_OUTPUT_ORDER.firstOrNull { it in outputs } ?: AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+
+    // Media falls back to the speaker after these
+    private val MEDIA_OUTPUT_ORDER = listOf(
+        AudioDeviceInfo.TYPE_HEARING_AID,
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_LINE_ANALOG,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_USB_ACCESSORY,
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_DOCK,
+        AudioDeviceInfo.TYPE_HDMI,
+    )
 
     // Rounding in a device's dB table must not push a volume to the next index
     private const val TOLERANCE_DB = 0.01
