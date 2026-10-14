@@ -131,12 +131,24 @@ class SendspinTimeFilter {
         snapshot = Snapshot(offset, drift, useDrift, lastUpdateTime, offsetCovariance, measurementCount)
     }
 
-    // Static delay: the sync offset set by the user's slider or pushed by the
-    // server. Output latency up to the DAC is not part of it - the player
-    // schedules against AudioTrack timestamps, which already include it.
-    // @Volatile: read by the audio thread (serverToClient), written from
-    // UI/main threads.
+    // Static delay: the sync offset, a server's if it pushed one and the
+    // user's otherwise (syncOffsetMicros). Output latency up to the DAC is
+    // not part of it - the player schedules against AudioTrack timestamps,
+    // which already include it. @Volatile: both fields are read by the audio
+    // thread (serverToClient) and written from others.
+
+    // The user's offset: the settings slider's value, set when the user moves
+    // it and restored when a connection is ready, both on the main thread.
     @Volatile private var userSyncOffsetMicros: Long = 0
+
+    // A server's push (client/sync_offset) stands in for the user's value
+    // until the user sets one again or the next connection starts
+    // (clearServerSyncOffset): it is that server's correction, not this
+    // device's. reset() keeps it, as it also runs mid-connection.
+    @Volatile private var serverSyncOffsetMicros: Long? = null
+
+    private val syncOffsetMicros: Long
+        get() = serverSyncOffsetMicros ?: userSyncOffsetMicros
 
     // Convergence tracking
     private var convergenceTimeMs: Long = 0L       // Time to reach isConverged
@@ -199,7 +211,7 @@ class SendspinTimeFilter {
      * Positive = delay playback (plays later), Negative = advance (plays earlier).
      */
     val staticDelayMs: Double
-        get() = userSyncOffsetMicros / 1000.0
+        get() = syncOffsetMicros / 1000.0
 
     /**
      * The spec's `output_delay_ms`: delay BEYOND the audio port, such as an
@@ -233,20 +245,35 @@ class SendspinTimeFilter {
     }
 
     /**
-     * Write the user's manual sync-offset correction (milliseconds).
-     * Called by the settings slider's broadcast path.
+     * Write the user's manual sync-offset correction (milliseconds). Called
+     * when the user changes it in the settings, and to restore the saved
+     * setting when a connection is ready.
+     *
+     * @param overrideServer false when this restores the saved setting
+     *   rather than the user changing it: a server's offset then stays in
+     *   force.
      */
-    fun setUserSyncOffsetMs(ms: Double) {
+    fun setUserSyncOffsetMs(ms: Double, overrideServer: Boolean = true) {
         userSyncOffsetMicros = (ms * 1000).toLong()
+        if (overrideServer) serverSyncOffsetMicros = null
     }
 
     /**
-     * Write a server-pushed sync-offset (from `client/sync_offset`).
-     * Goes into the same field as the user slider because both are
-     * corrections to when this device should play.
+     * Write a server-pushed sync-offset (from `client/sync_offset`). It
+     * replaces the user's value, as the latest correction to when this
+     * device should play, until the user sets one or the next connection
+     * starts ([clearServerSyncOffset]).
      */
     fun setServerSyncOffsetMs(ms: Double) {
-        userSyncOffsetMicros = (ms * 1000).toLong()
+        serverSyncOffsetMicros = (ms * 1000).toLong()
+    }
+
+    /**
+     * Drop a server's sync offset: the user's applies again. Called when a
+     * connection starts, not from [reset], which also runs mid-connection.
+     */
+    fun clearServerSyncOffset() {
+        serverSyncOffsetMicros = null
     }
 
     /**
@@ -420,7 +447,7 @@ class SendspinTimeFilter {
      * corresponding samples.
      */
     fun serverToClient(serverTimeMicros: Long): Long =
-        computeClientTime(serverTimeMicros) + userSyncOffsetMicros - outputDelayMicros
+        computeClientTime(serverTimeMicros) + syncOffsetMicros - outputDelayMicros
 
     /**
      * Inverse of [serverToClient]: the reference's `compute_server_time`
@@ -429,7 +456,7 @@ class SendspinTimeFilter {
      */
     fun clientToServer(clientTimeMicros: Long): Long {
         val s = snapshot
-        val clientTime = clientTimeMicros - userSyncOffsetMicros + outputDelayMicros
+        val clientTime = clientTimeMicros - syncOffsetMicros + outputDelayMicros
         val offsetNow = s.offset + s.effectiveDrift * (clientTime - s.lastUpdateTime)
         return clientTime + roundHalfAway(offsetNow)
     }

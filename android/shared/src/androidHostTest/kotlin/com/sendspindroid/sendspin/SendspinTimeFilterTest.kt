@@ -569,7 +569,7 @@ class SendspinTimeFilterTest {
         assertFalse("Concurrent reset and read should not cause exceptions", failed.get())
     }
 
-    // --- Static delay: user slider and server sync offset share one field ---
+    // --- Static delay: the user's sync offset, or a server's in its place ---
 
     @Test
     fun `staticDelayMs is the user sync offset`() {
@@ -584,6 +584,58 @@ class SendspinTimeFilterTest {
         f.setUserSyncOffsetMs(25.0)
         f.setServerSyncOffsetMs(-40.0)
         assertEquals(-40.0, f.staticDelayMs, 0.0001)
+    }
+
+    @Test
+    fun `a server's sync offset ends with its connection and the user's comes back`() {
+        val f = SendspinTimeFilter()
+        f.setUserSyncOffsetMs(25.0)
+        f.setServerSyncOffsetMs(-40.0)
+
+        f.clearServerSyncOffset()
+
+        assertEquals(25.0, f.staticDelayMs, 0.0001)
+    }
+
+    @Test
+    fun `a server's sync offset ends with its connection even with no user offset`() {
+        val f = SendspinTimeFilter()
+        f.setServerSyncOffsetMs(-40.0)
+
+        f.clearServerSyncOffset()
+
+        assertEquals(0.0, f.staticDelayMs, 0.0001)
+    }
+
+    @Test
+    fun `a reset keeps a server's sync offset`() {
+        // A reset also runs mid-connection, when the network changes.
+        val f = SendspinTimeFilter()
+        f.setServerSyncOffsetMs(-40.0)
+
+        f.reset()
+
+        assertEquals(-40.0, f.staticDelayMs, 0.0001)
+    }
+
+    @Test
+    fun `the user setting an offset takes over from a server's`() {
+        val f = SendspinTimeFilter()
+        f.setServerSyncOffsetMs(-40.0)
+        f.setUserSyncOffsetMs(10.0)
+        assertEquals(10.0, f.staticDelayMs, 0.0001)
+    }
+
+    @Test
+    fun `restoring the user's offset leaves a server's in force`() {
+        val f = SendspinTimeFilter()
+        f.setServerSyncOffsetMs(-40.0)
+
+        f.setUserSyncOffsetMs(10.0, overrideServer = false)
+
+        assertEquals(-40.0, f.staticDelayMs, 0.0001)
+        f.clearServerSyncOffset()
+        assertEquals(10.0, f.staticDelayMs, 0.0001)
     }
 
     @Test

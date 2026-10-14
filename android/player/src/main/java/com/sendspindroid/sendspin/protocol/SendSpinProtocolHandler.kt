@@ -448,32 +448,49 @@ abstract class SendSpinProtocolHandler(
      * Send player state update (volume/muted/availability).
      */
     protected fun sendPlayerStateUpdate() {
-        // "The client MUST NOT send other Sendspin messages until it receives
-        // that activation." Every client/state goes through here, so this is
-        // the one gate for all of them; accepting the activation sends the
-        // first, with whatever changed in the meantime.
-        if (!activationSeen) return
+        // The state is read when the message is sent, not here: callers on
+        // different threads can get here in one order and have their sends
+        // run in the other, and the last client/state the server receives
+        // must carry the current state, `available` above all.
+        sendProtocolMessageBuiltOnSend {
+            // "The client MUST NOT send other Sendspin messages until it receives
+            // that activation." Every client/state goes through here, so this is
+            // the one gate for all of them; accepting the activation sends the
+            // first, with whatever changed in the meantime.
+            if (!activationSeen) return@sendProtocolMessageBuiltOnSend null
 
-        // The spec's output_delay_ms, NOT our signed staticDelayMs: the
-        // latter is the hardware latency we already compensate ourselves, and
-        // reporting it would invite the server to compensate it again.
-        val delayMs = getTimeFilter().outputDelayMs
-        sendProtocolMessage(
+            // The spec's output_delay_ms, NOT our signed staticDelayMs: the
+            // latter is the user's or a server's sync offset, which the server
+            // does not apply.
             MessageBuilder.buildPlayerState(
-                currentVolume, currentMuted, isAvailable(), delayMs,
-                requiredLeadTimeMs = if (outputStarted) {
-                    SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_WARM_MS
-                } else {
-                    SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_MS
-                },
-                minBufferMs = minBufferEstimator.minBufferMs,
+                currentVolume, currentMuted, isAvailable(), getTimeFilter().outputDelayMs,
+                requiredLeadTimeMs = requiredLeadTimeMs(),
+                minBufferMs = minBufferEstimator.minBufferMs + syncOffsetLeadMs(),
                 // A role's object may only appear once the role is active.
                 playerRoleActive = activeRoles.contains(ROLE_PLAYER_V1),
                 format = preferredFormat,
                 artworkRoleActive = activeRoles.contains(SendSpinProtocol.Roles.ARTWORK),
             )
-        )
+        }
     }
+
+    private fun requiredLeadTimeMs(): Int = syncOffsetLeadMs() + if (outputStarted) {
+        SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_WARM_MS
+    } else {
+        SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_MS
+    }
+
+    /**
+     * Lead that a negative sync offset uses up: the player plays that much
+     * earlier than the timestamps say, and the server, which does not know
+     * of the offset, schedules for them. Added to both timing parameters,
+     * which "MUST NOT include output_delay_ms" - this is not it.
+     */
+    private fun syncOffsetLeadMs(): Int =
+        kotlin.math.ceil(maxOf(0.0, -getTimeFilter().staticDelayMs)).toInt()
+
+    /** The sync offset changed: the timing parameters reported depend on it. */
+    protected fun onSyncOffsetChanged() = sendPlayerStateUpdate()
 
     /**
      * Measure how late an audio chunk arrived and report `min_buffer_ms` when
@@ -919,6 +936,19 @@ abstract class SendSpinProtocolHandler(
         // encodeJson takes the send mutex, so this has to be in a coroutine.
         getCoroutineScope().launch {
             if (wireCodec === channel) sendProtocolMessageAwaiting(text)
+        }
+    }
+
+    /**
+     * [sendProtocolMessage] with the message written by [build] when the send
+     * runs, from the state at that moment; null sends nothing.
+     */
+    private fun sendProtocolMessageBuiltOnSend(build: () -> String?) {
+        val channel = wireCodec
+        getCoroutineScope().launch {
+            if (wireCodec !== channel) return@launch
+            val text = build() ?: return@launch
+            sendProtocolMessageAwaiting(text)
         }
     }
 
@@ -2076,6 +2106,7 @@ abstract class SendSpinProtocolHandler(
         Log.d(tag, "client/sync_offset: static delay set to ${clampedOffset}ms")
 
         onSyncOffsetApplied(clampedOffset, result.source)
+        onSyncOffsetChanged()
     }
 
     // ========== Binary Message Handling ==========
@@ -2147,12 +2178,8 @@ abstract class SendSpinProtocolHandler(
     fun protocolStats() = ProtocolStats(
         activeRoles = activeRoles,
         pskCategory = if (wireCodec != null) matchedPskCategory() else null,
-        minBufferMs = minBufferEstimator.minBufferMs,
-        requiredLeadTimeMs = if (outputStarted) {
-            SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_WARM_MS
-        } else {
-            SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_MS
-        },
+        minBufferMs = minBufferEstimator.minBufferMs + syncOffsetLeadMs(),
+        requiredLeadTimeMs = requiredLeadTimeMs(),
     )
 
     // ========== Artwork (roles/artwork/v1.md) ==========

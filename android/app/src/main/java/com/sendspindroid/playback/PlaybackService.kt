@@ -201,8 +201,8 @@ class PlaybackService : MediaLibraryService() {
     private val syncOffsetReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val offsetMs = intent.getIntExtra(SyncOffsetPreference.EXTRA_OFFSET_MS, 0)
-            sendSpinClient?.getTimeFilter()?.let { timeFilter ->
-                timeFilter.setUserSyncOffsetMs(offsetMs.toDouble())
+            sendSpinClient?.let { client ->
+                client.setUserSyncOffsetMs(offsetMs.toDouble())
                 Log.i(TAG, "Applied sync offset from settings change: ${offsetMs}ms")
             }
         }
@@ -2994,14 +2994,17 @@ class PlaybackService : MediaLibraryService() {
     /**
      * Applies the manual sync offset from UserSettings to the TimeFilter.
      * Called when connecting to a server to apply the saved offset.
+     *
+     * A setting of 0 is applied too: the client may hold an older value,
+     * set while another client was in use. A restore is not the user
+     * changing the offset, so it leaves an offset the server has already
+     * pushed in force.
      */
     private fun applySyncOffsetFromSettings() {
         val offsetMs = com.sendspindroid.UserSettings.getSyncOffsetMs()
-        if (offsetMs != 0) {
-            sendSpinClient?.getTimeFilter()?.let { timeFilter ->
-                timeFilter.setUserSyncOffsetMs(offsetMs.toDouble())
-                Log.i(TAG, "Applied manual sync offset from settings: ${offsetMs}ms")
-            }
+        sendSpinClient?.let { client ->
+            client.setUserSyncOffsetMs(offsetMs.toDouble(), overrideServer = false)
+            Log.i(TAG, "Applied manual sync offset from settings: ${offsetMs}ms")
         }
     }
 
@@ -3011,8 +3014,8 @@ class PlaybackService : MediaLibraryService() {
      */
     fun updateSyncOffset(offsetMs: Int) {
         com.sendspindroid.UserSettings.setSyncOffsetMs(offsetMs)
-        sendSpinClient?.getTimeFilter()?.let { timeFilter ->
-            timeFilter.setUserSyncOffsetMs(offsetMs.toDouble())
+        sendSpinClient?.let { client ->
+            client.setUserSyncOffsetMs(offsetMs.toDouble())
             Log.i(TAG, "Updated sync offset to: ${offsetMs}ms")
         }
     }
