@@ -41,6 +41,14 @@ interface AudioDecoder {
     fun decode(compressedData: ByteArray, timestampUs: Long): List<DecodedAudio>
 
     /**
+     * Return the PCM the decoder still holds for chunks already passed to
+     * [decode], ahead of a release at a format change: that audio was
+     * received in the old format and is still to be played. The decoder is
+     * not used for decoding afterwards.
+     */
+    fun drain(): List<DecodedAudio> = emptyList()
+
+    /**
      * Flush the decoder state.
      *
      * Call this on stream/clear or when seeking to reset internal buffers.

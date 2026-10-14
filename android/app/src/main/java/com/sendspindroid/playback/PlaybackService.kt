@@ -1248,7 +1248,7 @@ class PlaybackService : MediaLibraryService() {
                             Log.d(TAG, "Playback playing - resuming audio and acquiring playback locks")
                             sendSpinPlayer?.updatePlayWhenReadyFromServer(true)
                             engine.applyServerPlayback(newPlaybackState)
-                            sendSpinPlayer?.setSyncAudioPlayer(engine.player)
+                            sendSpinPlayer?.setSyncAudioPlayer(engine.hostPlayer)
                             acquirePlaybackLocks()
                         }
                         else -> { /* No action needed */ }

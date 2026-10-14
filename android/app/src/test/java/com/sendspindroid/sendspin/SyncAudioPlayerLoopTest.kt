@@ -1022,6 +1022,19 @@ class SyncAudioPlayerLoopTest {
     }
 
     @Test
+    fun `a player whose remaining audio all went late has played out`() {
+        queueNumberedStream(nowUs + 400_000L, count = 60)
+        tickUntilPlaying()
+        repeat(500) { if (player.getBufferedDurationMs() > 400) tick() }
+        // output_delay_ms 0 -> 1000: everything still queued is now late
+        timeFilter.setOutputDelayMs(1000.0)
+        repeat(200) { tick() }
+
+        assertEquals(0L, queuedSamples())
+        assertTrue("nothing is left to play: ${player.getPlaybackState()}", player.hasPlayedOut())
+    }
+
+    @Test
     fun `a realignment that has not settled holds the next back for the cooldown`() {
         steadyPlay(nowUs + 400_000L, count = 1000)
         timeFilter.setUserSyncOffsetMs(-800.0)

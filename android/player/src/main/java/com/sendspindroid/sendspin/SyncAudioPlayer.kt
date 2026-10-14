@@ -2095,6 +2095,16 @@ class SyncAudioPlayer(
     }
 
     /**
+     * Whether nothing is left to play: the queue is empty and the player is
+     * not playing - the output has run dry, or start gating dropped every
+     * chunk as late. The track holds nothing but silence, so releasing it
+     * now cuts nothing off. While PLAYING, an empty queue still has audio in
+     * the track, until the output runs dry.
+     */
+    fun hasPlayedOut(): Boolean =
+        chunkQueue.isEmpty() && playbackState != PlaybackState.PLAYING
+
+    /**
      * Set the callback for playback state changes.
      */
     fun setStateCallback(callback: SyncAudioPlayerCallback?) {
