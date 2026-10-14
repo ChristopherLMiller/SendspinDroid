@@ -131,10 +131,10 @@ class ConnectionCoordinator(
     // callback runs (see init) and close() is called.
     // The network whose identity and addresses are followed: never a VPN.
     @Volatile private var lastNetwork: Network? = null
-    // The network the followed one took over from while it was still up,
-    // where a connection open before the switch still is. Only the first of
-    // several such switches: the connection stays where it was.
-    @Volatile private var supersededNetwork: Network? = null
+    // The followed network when the connection last became Ready: where a
+    // connection open now is. Null while there is none, and once a handover
+    // has given it up.
+    @Volatile private var sessionNetwork: Network? = null
     @Volatile private var lastLinkAddresses: Set<Pair<java.net.InetAddress, Int>>? = null
     // Set when a network is followed without an identity change: its first
     // addresses are reported rather than taken as the baseline, since the
@@ -221,10 +221,11 @@ class ConnectionCoordinator(
 
         /**
          * Follow [network] from now on. The first one is the baseline. A
-         * different one is a handover only if the previous one is gone: Wi-Fi
-         * that lost validation gives way to cellular but stays connected, and
-         * a connection open on it carries on. Nor is a return to that Wi-Fi,
-         * which has been up all along.
+         * different one is a handover only if the network the connection is
+         * on is gone: Wi-Fi that lost validation gives way to cellular but
+         * stays connected, and a connection open on it carries on, also when
+         * Wi-Fi is the best network again. With no connection, the network
+         * just left stands in for it.
          */
         private fun follow(network: Network) {
             val prev = lastNetwork
@@ -233,24 +234,19 @@ class ConnectionCoordinator(
 
             // The next onLinkPropertiesChanged takes the new network's baseline.
             lastLinkAddresses = null
-            val superseded = supersededNetwork
-            if (superseded?.networkHandle == network.networkHandle) {
-                Log.i(TAG, "Back on network ${network.networkHandle}, up since it was left")
-                supersededNetwork = null
-                reportFirstAddresses = true
-                return
-            }
-            // May be a step behind the callbacks. A stale answer that the old
+            val anchor = sessionNetwork ?: prev
+            // May be a step behind the callbacks. A stale answer that the
             // network is still up only leaves the reconnect to the failure of
             // the socket on it, which resets the clock as well.
-            if (connectivityManager?.getNetworkCapabilities(prev) != null) {
-                Log.i(TAG, "Following network ${network.networkHandle}; ${prev.networkHandle} is still up")
-                if (superseded == null) supersededNetwork = prev
+            if (anchor.networkHandle == network.networkHandle ||
+                connectivityManager?.getNetworkCapabilities(anchor) != null
+            ) {
+                Log.i(TAG, "Following network ${network.networkHandle}; ${anchor.networkHandle} is still up")
                 reportFirstAddresses = true
                 return
             }
-            Log.i(TAG, "Network identity changed: ${prev.networkHandle} -> ${network.networkHandle}")
-            supersededNetwork = null
+            Log.i(TAG, "Network identity changed: ${anchor.networkHandle} -> ${network.networkHandle}")
+            sessionNetwork = null
             scope.launch { _networkEvents.emit(NetworkEvent.IdentityChanged(network.networkHandle)) }
         }
 
@@ -280,6 +276,16 @@ class ConnectionCoordinator(
     }
 
     init {
+        scope.launch {
+            sessionState.collect { state ->
+                if (state.sendSpin is TransportState.Ready) {
+                    if (sessionNetwork == null) sessionNetwork = lastNetwork
+                } else {
+                    sessionNetwork = null
+                }
+            }
+        }
+
         val cm = connectivityManager
         if (cm != null) {
             // One network at a time: a callback for every network with

@@ -79,9 +79,22 @@ class ConnectionCoordinatorNetworkCallbackTest {
         every { connectivityManager.getNetworkCapabilities(network) } returns null
     }
 
+    private val sendSpinState = MutableStateFlow<TransportState>(TransportState.Idle)
+
+    /** The connection is up, on whatever network is followed now. */
+    private fun TestScope.connected() {
+        sendSpinState.value = TransportState.Ready
+        testScheduler.runCurrent()
+    }
+
+    private fun TestScope.disconnected() {
+        sendSpinState.value = TransportState.Idle
+        testScheduler.runCurrent()
+    }
+
     private fun TestScope.coordinator(): ConnectionCoordinator = ConnectionCoordinator(
         currentServerFlow = MutableStateFlow(null),
-        sendSpinStateFlow = MutableStateFlow(TransportState.Idle),
+        sendSpinStateFlow = sendSpinState,
         scope = TestScope(StandardTestDispatcher(testScheduler)),
         connectAttempt = { _, _ -> false },
         context = context,
@@ -206,6 +219,7 @@ class ConnectionCoordinatorNetworkCallbackTest {
         val wifi = network(1L)
         val wifiCaps = capabilities()
         becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+        connected()
 
         // Cellular takes over while Wi-Fi stays up, then goes: Wi-Fi is the
         // network a LAN connection has been on all along. Each network's
@@ -221,11 +235,12 @@ class ConnectionCoordinatorNetworkCallbackTest {
     }
 
     @Test
-    fun `a return after several switches is to the first network left`() = runTest {
+    fun `a return after several switches is to the network the connection is on`() = runTest {
         val events = coordinatorEvents()
         val wifi = network(1L)
         val wifiCaps = capabilities()
         becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+        connected()
 
         // Wi-Fi -> cellular -> Ethernet, each left still up, then Ethernet
         // goes and Wi-Fi is best again.
@@ -244,34 +259,70 @@ class ConnectionCoordinatorNetworkCallbackTest {
     }
 
     @Test
-    fun `an identity change forgets the network left before it`() = runTest {
+    fun `a handover is to the network the connection was made on, not the one last left`() = runTest {
+        val events = coordinatorEvents()
+        val wifi = network(1L)
+        becomesBest(wifi, capabilities(), properties(address("10.0.1.6", 22)))
+        connected()
+
+        // Leaving home: Wi-Fi goes, cellular is a handover
+        gone(wifi)
+        val cell = network(2L)
+        val cellCaps = capabilities()
+        becomesBest(cell, cellCaps, properties(address("10.201.7.9", 30)))
+        disconnected()
+
+        // Home again: Wi-Fi rejoins while cellular stays up, and the
+        // connection is made on it
+        stillUp(cell, cellCaps)
+        val wifi2 = network(3L)
+        becomesBest(wifi2, capabilities(), properties(address("10.0.1.7", 22)))
+        connected()
+
+        // Leaving again: the connection's Wi-Fi is gone
+        gone(wifi2)
+        becomesBest(cell, cellCaps, properties(address("10.201.7.9", 30)))
+        testScheduler.runCurrent()
+
+        assertEquals(
+            listOf<NetworkEvent>(NetworkEvent.IdentityChanged(2L), NetworkEvent.IdentityChanged(2L)),
+            events.filterIsInstance<NetworkEvent.IdentityChanged>(),
+        )
+    }
+
+    @Test
+    fun `a connection made after a network went is followed, not the network`() = runTest {
         val events = coordinatorEvents()
         val wifi = network(1L)
         val wifiCaps = capabilities()
         becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+        connected()
+
+        // A WAN outage: cellular takes over while Wi-Fi stays up
         stillUp(wifi, wifiCaps)
         val cell = network(2L)
-        becomesBest(cell, capabilities(), properties(address("10.201.7.9", 30)))
+        val cellCaps = capabilities()
+        becomesBest(cell, cellCaps, properties(address("10.201.7.9", 30)))
 
-        // Wi-Fi and cellular both go; a connection now has to be on Ethernet.
+        // The router reboots: Wi-Fi goes with no callback (it is not the best
+        // network) and the connection with it, then Wi-Fi rejoins as a new
+        // network while cellular is up, and the connection is made on it
         gone(wifi)
-        gone(cell)
-        val ethernet = network(3L)
-        val ethernetCaps = capabilities()
-        becomesBest(ethernet, ethernetCaps, properties(address("10.0.1.8", 22)))
+        disconnected()
+        stillUp(cell, cellCaps)
+        val wifi2 = network(3L)
+        val wifi2Caps = capabilities()
+        becomesBest(wifi2, wifi2Caps, properties(address("10.0.1.7", 22)))
+        connected()
 
-        // Ethernet is left while up, and returned to.
-        stillUp(ethernet, ethernetCaps)
-        val cell2 = network(4L)
-        becomesBest(cell2, capabilities(), properties(address("10.201.7.10", 30)))
-        gone(cell2)
-        becomesBest(ethernet, ethernetCaps, properties(address("10.0.1.8", 22)))
+        // Another outage, and back
+        stillUp(wifi2, wifi2Caps)
+        becomesBest(cell, cellCaps, properties(address("10.201.7.9", 30)))
+        gone(cell)
+        becomesBest(wifi2, wifi2Caps, properties(address("10.0.1.7", 22)))
         testScheduler.runCurrent()
 
-        assertEquals(
-            listOf<NetworkEvent>(NetworkEvent.IdentityChanged(3L)),
-            events.filterIsInstance<NetworkEvent.IdentityChanged>(),
-        )
+        assertTrue("no handover for a connection still up: $events", events.none { it is NetworkEvent.IdentityChanged })
     }
 
     /**
@@ -287,6 +338,8 @@ class ConnectionCoordinatorNetworkCallbackTest {
         if (goingAway) gone(wifi)
 
         callback.captured.onCapabilitiesChanged(wifi, wifiCaps)
+        // Nothing to report for the same addresses: the repeat was no switch
+        callback.captured.onLinkPropertiesChanged(wifi, properties(address("10.0.1.6", 22)))
         callback.captured.onLinkPropertiesChanged(wifi, properties(address("10.0.1.6", 22), address("2001:db8::1")))
         testScheduler.runCurrent()
         return events
