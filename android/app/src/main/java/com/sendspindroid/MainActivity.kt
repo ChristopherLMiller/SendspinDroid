@@ -12,8 +12,6 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.sendspindroid.diagnostics.DiagnosticsExport
@@ -125,9 +123,6 @@ class MainActivity : AppCompatActivity() {
     // Provides playback control and state observation
     private var mediaControllerFuture: ListenableFuture<MediaController>? = null
     private var mediaController: MediaController? = null
-
-    // Handler for UI operations
-    private val handler = Handler(Looper.getMainLooper())
 
     // User manually disconnected flag - when true, blocks auto-connect to default server
     // Set when user taps "Switch Server" or manually selects a different server while connected
@@ -1862,9 +1857,6 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onDestroy() {
         super.onDestroy()
-
-        // Cancel any pending handler callbacks
-        handler.removeCallbacksAndMessages(null)
 
         // Release MediaController connection to service
         mediaControllerFuture?.let {

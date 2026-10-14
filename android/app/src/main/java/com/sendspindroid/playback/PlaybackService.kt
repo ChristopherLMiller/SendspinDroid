@@ -363,6 +363,7 @@ class PlaybackService : MediaLibraryService() {
     private var volumeObserverRegistered: Boolean = false  // Track registration state to prevent leaks
     private var lastKnownVolume: Int = -1  // Track to detect external volume changes
     private var lastOutputType: Int? = null  // The output lastKnownVolume was set or synced on
+    private val fullVolumeOutputs = mutableSetOf<Int>()  // Outputs setVolume found holding the index at max
 
     // Audio focus management - required for Android Auto to hand over audio output
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -1987,6 +1988,7 @@ class PlaybackService : MediaLibraryService() {
                 // on a fixed-volume output, and the volume asked for plays.
                 Log.d(TAG, "Full-volume output: volume $percent as track gain")
                 lastKnownVolume = applied
+                fullVolumeOutputs += output
                 engine.setTrackGain(VolumeLaw.amplitude(percent))
             }
             else -> {
@@ -2094,7 +2096,10 @@ class PlaybackService : MediaLibraryService() {
         val am = audioManager ?: return@Runnable
         val index = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         val output = mediaOutputType(am)
-        when (VolumeLaw.outputChange(am.isVolumeFixed, index, lastKnownVolume, output, lastOutputType)) {
+        // An output setVolume found to be full-volume (its type from the same
+        // mediaOutputType, so below API 33 too), with the index still at max
+        val fullVolume = output in fullVolumeOutputs && index == am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        when (VolumeLaw.outputChange(am.isVolumeFixed, fullVolume, index, lastKnownVolume, output, lastOutputType)) {
             VolumeLaw.OutputChange.KEEP_VOLUME -> {
                 lastKnownVolume = index
                 lastOutputType = output

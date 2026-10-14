@@ -95,23 +95,30 @@ class VolumeLawTest {
 
     @Test
     fun `a fixed-volume output keeps its volume whatever outputs come or go`() {
-        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(true, maxIndex, maxIndex, HDMI, HDMI))
+        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(true, false, maxIndex, maxIndex, HDMI, HDMI))
         // Media moved there from a variable output
-        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(true, maxIndex, 8, HDMI, A2DP))
+        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(true, false, maxIndex, 8, HDMI, A2DP))
+    }
+
+    @Test
+    fun `a full-volume output keeps its volume when media comes back to it`() {
+        // Bluetooth headphones gone, media back on HDMI with CEC: the index is held at max
+        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(false, true, maxIndex, 8, HDMI, A2DP))
+        assertEquals(OutputChange.KEEP_VOLUME, VolumeLaw.outputChange(false, true, maxIndex, maxIndex, HDMI, HDMI))
     }
 
     @Test
     fun `a sink that leaves media where it was changes nothing`() {
-        assertEquals(OutputChange.NONE, VolumeLaw.outputChange(false, 8, 8, SPEAKER, SPEAKER))
-        // Full-volume HDMI: the index stays at max
-        assertEquals(OutputChange.NONE, VolumeLaw.outputChange(false, maxIndex, maxIndex, HDMI, HDMI))
+        assertEquals(OutputChange.NONE, VolumeLaw.outputChange(false, false, 8, 8, SPEAKER, SPEAKER))
+        // HDMI at max, not found to be full-volume yet
+        assertEquals(OutputChange.NONE, VolumeLaw.outputChange(false, false, maxIndex, maxIndex, HDMI, HDMI))
     }
 
     @Test
     fun `media on another output or index takes that device volume`() {
-        assertEquals(OutputChange.DEVICE_VOLUME, VolumeLaw.outputChange(false, 5, 8, SPEAKER, SPEAKER))
+        assertEquals(OutputChange.DEVICE_VOLUME, VolumeLaw.outputChange(false, false, 5, 8, SPEAKER, SPEAKER))
         // Same index, other curve
-        assertEquals(OutputChange.DEVICE_VOLUME, VolumeLaw.outputChange(false, 8, 8, A2DP, SPEAKER))
+        assertEquals(OutputChange.DEVICE_VOLUME, VolumeLaw.outputChange(false, false, 8, 8, A2DP, SPEAKER))
     }
 
     @Test
@@ -125,6 +132,12 @@ class VolumeLawTest {
         assertEquals(SPEAKER, VolumeLaw.mediaOutputType(listOf(SPEAKER, AudioDeviceInfo.TYPE_BLUETOOTH_SCO)))
         // Android 9 and 10 put A2DP ahead of wired outputs, and both ahead of HDMI
         assertEquals(A2DP, VolumeLaw.mediaOutputType(listOf(SPEAKER, AudioDeviceInfo.TYPE_WIRED_HEADSET, A2DP)))
+        // A hearing aid ahead of A2DP, and line out between wired headphones and a wired headset
+        val hearingAid = AudioDeviceInfo.TYPE_HEARING_AID
+        assertEquals(hearingAid, VolumeLaw.mediaOutputType(listOf(SPEAKER, A2DP, hearingAid)))
+        val line = AudioDeviceInfo.TYPE_LINE_ANALOG
+        assertEquals(line, VolumeLaw.mediaOutputType(listOf(SPEAKER, AudioDeviceInfo.TYPE_WIRED_HEADSET, line)))
+        assertEquals(wired, VolumeLaw.mediaOutputType(listOf(SPEAKER, line, wired)))
         val usb = AudioDeviceInfo.TYPE_USB_HEADSET
         assertEquals(usb, VolumeLaw.mediaOutputType(listOf(SPEAKER, HDMI, usb)))
         assertEquals(HDMI, VolumeLaw.mediaOutputType(listOf(SPEAKER, HDMI)))

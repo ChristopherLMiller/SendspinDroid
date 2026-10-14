@@ -66,7 +66,7 @@ internal object VolumeLaw {
 
     /** What a change in the outputs connected means for the volume ([outputChange]). */
     enum class OutputChange {
-        /** A fixed-volume output: there is no index, the track gain is the whole volume. */
+        /** A fixed-volume or full-volume output: no index to set, the track gain is the whole volume. */
         KEEP_VOLUME,
 
         /** Media plays on the same output at the same index: nothing that plays changed. */
@@ -79,11 +79,20 @@ internal object VolumeLaw {
     /**
      * What to do once outputs were connected or removed, from the STREAM_MUSIC
      * [index] and the [output] media plays on now, against the ones the volume
-     * was last set or synced for.
+     * was last set or synced for. [fullVolume]: media plays on an output found
+     * to be full-volume before ([isFullVolumeOutput]), with the index at max,
+     * which AudioManager.isVolumeFixed does not report.
      */
-    fun outputChange(volumeFixed: Boolean, index: Int, lastIndex: Int, output: Int?, lastOutput: Int?): OutputChange =
+    fun outputChange(
+        volumeFixed: Boolean,
+        fullVolume: Boolean,
+        index: Int,
+        lastIndex: Int,
+        output: Int?,
+        lastOutput: Int?,
+    ): OutputChange =
         when {
-            volumeFixed -> OutputChange.KEEP_VOLUME
+            volumeFixed || fullVolume -> OutputChange.KEEP_VOLUME
             index == lastIndex && output == lastOutput -> OutputChange.NONE
             else -> OutputChange.DEVICE_VOLUME
         }
