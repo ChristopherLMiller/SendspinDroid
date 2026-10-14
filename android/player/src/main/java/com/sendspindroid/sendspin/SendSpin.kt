@@ -133,6 +133,8 @@ class SendSpin(
 
         // Enough of a 43-character server_id to tell two servers apart.
         private const val SERVER_ID_LABEL_LENGTH = 12
+
+        private fun monotonicMs(): Long = System.nanoTime() / 1_000_000
     }
 
     /**
@@ -290,7 +292,10 @@ class SendSpin(
     // cannot orphan a job or leave the field pointing at a running watchdog
     // that the caller believed was stopped. @Volatile is still needed for any
     // reader that observes the field without taking the lock.
-    private val lastByteReceivedAtMs = AtomicLong(System.currentTimeMillis())
+    // On the monotonic clock, which stops in deep sleep: a sleep is no
+    // silence from the server, and TimeSyncManager deals with the time
+    // asleep. The wall clock could also be stepped.
+    private val lastByteReceivedAtMs = AtomicLong(monotonicMs())
     private val watchdogLock = Any()
     @Volatile
     private var stallWatchdogJob: Job? = null
@@ -310,7 +315,7 @@ class SendSpin(
 
     /** Milliseconds since the transport last delivered a text or binary frame. */
     fun getLastByteReceivedAgoMs(): Long =
-        System.currentTimeMillis() - lastByteReceivedAtMs.get()
+        monotonicMs() - lastByteReceivedAtMs.get()
 
     /**
      * True when the stall watchdog would actually evaluate: the handshake is
@@ -820,7 +825,7 @@ class SendSpin(
     override fun onStreamStart(config: StreamConfig) {
         // Reset so we don't false-trip from any stale timestamp accumulated while
         // the stream was inactive (we were not expecting data then).
-        lastByteReceivedAtMs.set(System.currentTimeMillis())
+        lastByteReceivedAtMs.set(monotonicMs())
 
         val preferredCodec = host.preferredCodec()
         Log.i(TAG, "Stream started: server chose codec=${config.codec} (we preferred=$preferredCodec)")
@@ -1248,7 +1253,7 @@ class SendSpin(
         synchronized(watchdogLock) {
             stallWatchdogJob?.cancel()
             // Reset so we don't false-trip using a stale pre-handshake timestamp
-            lastByteReceivedAtMs.set(System.currentTimeMillis())
+            lastByteReceivedAtMs.set(monotonicMs())
             stallWatchdogJob = timerScope.launch {
                 while (true) {
                     delay(STALL_CHECK_INTERVAL_MS)
@@ -1295,7 +1300,7 @@ class SendSpin(
         // arriving after a skip, so the short threshold must keep applying.
         val streaming = isStreamActive
         val threshold = if (streaming) STALL_TIMEOUT_MS else IDLE_STALL_TIMEOUT_MS
-        val sinceLastByte = System.currentTimeMillis() - lastByteReceivedAtMs.get()
+        val sinceLastByte = monotonicMs() - lastByteReceivedAtMs.get()
         if (sinceLastByte > threshold) {
             val mode = if (streaming) "streaming" else "idle"
             Log.w(TAG, "Stall watchdog: no data received in ${sinceLastByte}ms ($mode threshold ${threshold}ms) - forcing transport close")
@@ -1393,7 +1398,7 @@ class SendSpin(
             // received, so the driver gets rawUtf8 and never a re-encoding.
             val driver = handshakeDriver
             if (driver != null && driver.phase != SendSpinHandshakeDriver.Phase.Transport) {
-                lastByteReceivedAtMs.set(System.currentTimeMillis())
+                lastByteReceivedAtMs.set(monotonicMs())
                 // Serialized against the handshake timeout, which fires on
                 // the timer thread.
                 synchronized(driver) { driver.onCleartextFrame(rawUtf8) }
@@ -1408,7 +1413,7 @@ class SendSpin(
         }
 
         override fun onMessage(bytes: ByteArray) {
-            lastByteReceivedAtMs.set(System.currentTimeMillis())
+            lastByteReceivedAtMs.set(monotonicMs())
             handleBinaryMessage(bytes)
         }
 

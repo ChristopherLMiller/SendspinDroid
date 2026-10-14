@@ -4,12 +4,15 @@ import com.sendspindroid.sendspin.SendspinTimeFilter
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import com.sendspindroid.sendspin.protocol.TimeMeasurement
 import com.sendspindroid.shared.log.Log
+import com.sendspindroid.shared.platform.Platform
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Drives the NTP-style time-sync burst loop and feeds its filter.
@@ -28,12 +31,22 @@ import kotlinx.coroutines.launch
  * mutex serialises both paths, and out-of-burst replies are not in
  * competition with any burst's best-of-RTT selection (no burst is
  * active by definition).
+ *
+ * Deep sleep: the client timestamps are on CLOCK_MONOTONIC, which stops
+ * while the device sleeps, and the server's clock does not, so after a
+ * sleep the offset has stepped by the time asleep. [suspendedTimeMicros]
+ * (the time spent asleep since boot) is checked on every inbound frame
+ * ([checkForSleep]), so the frame that wakes the device - a remote
+ * start, its metadata - is not translated with the estimate from before
+ * the sleep. The filter then starts over and bursts follow back to back;
+ * a burst whose round trips span the sleep is discarded.
  */
 class TimeSyncManager(
     private val timeFilter: SendspinTimeFilter,
     private val sendClientTime: () -> Unit,
     private val onMeasurementApplied: () -> Unit = {},
-    private val tag: String = "TimeSyncManager"
+    private val tag: String = "TimeSyncManager",
+    private val suspendedTimeMicros: () -> Long = Platform::suspendedTimeMicros,
 ) {
     companion object {
         private const val MAX_ACCEPTABLE_RTT_US = 10_000_000L
@@ -46,6 +59,15 @@ class TimeSyncManager(
         private const val INTERVAL_MS_CONVERGED = 3000L
         private const val HIGH_JITTER_THRESHOLD_US = 20_000L
         private const val LOW_JITTER_THRESHOLD_US = 5_000L
+
+        // More time asleep than this since the last burst starts sync over.
+        // Any real sleep is far longer; the reading itself is good to 50 us.
+        private const val SLEEP_STEP_US = 1_000L
+
+        // After a sleep: bursts without the usual wait, enough for the
+        // filter to converge again (five measurements). A connection that
+        // has converged before stays muted for sync until then.
+        private const val BURSTS_AFTER_SLEEP = 5
     }
 
     @Volatile
@@ -63,6 +85,20 @@ class TimeSyncManager(
     private var currentBurstCount = SendSpinProtocol.TimeSync.BURST_COUNT
     private var currentIntervalMs = SendSpinProtocol.TimeSync.INTERVAL_MS
 
+    // Time asleep since boot as of the last burst, and as this one began.
+    // Guarded by pendingBurstMeasurements.
+    private var suspendedAtLastBurstUs = 0L
+    private var suspendedAtBurstStartUs = 0L
+
+    // Bursts to send without waiting the interval, and whether a sleep was
+    // found since the last burst was processed. Guarded by
+    // pendingBurstMeasurements.
+    private var immediateBursts = 0
+    private var sleptSinceLastBurst = false
+
+    // Ends the wait between bursts early
+    private val wakeLoop = Channel<Unit>(Channel.CONFLATED)
+
     val isRunning: Boolean
         get() = running
 
@@ -74,12 +110,21 @@ class TimeSyncManager(
     fun start(scope: CoroutineScope) {
         if (running) return
         running = true
+        synchronized(pendingBurstMeasurements) {
+            suspendedAtLastBurstUs = suspendedTimeMicros()
+            immediateBursts = 0
+            sleptSinceLastBurst = false
+        }
+        wakeLoop.tryReceive()
 
         syncJob = scope.launch {
             sendTimeSyncBurst()
 
             while (running && isActive) {
-                delay(currentIntervalMs)
+                val now = synchronized(pendingBurstMeasurements) {
+                    if (immediateBursts > 0) { immediateBursts--; true } else false
+                }
+                if (!now) withTimeoutOrNull(currentIntervalMs) { wakeLoop.receive() }
                 if (running) {
                     sendTimeSyncBurst()
                 }
@@ -125,6 +170,12 @@ class TimeSyncManager(
             return false
         }
 
+        // A sleep since the last burst: its round trip may span it
+        val slept = synchronized(pendingBurstMeasurements) {
+            sleptSinceLastBurst || suspendedTimeMicros() - suspendedAtLastBurstUs > SLEEP_STEP_US
+        }
+        if (slept) return false
+
         val maxError = computeMaxError(measurement.rtt)
         timeFilter.addMeasurement(measurement.offset, maxError, measurement.clientReceived)
 
@@ -140,6 +191,7 @@ class TimeSyncManager(
         synchronized(pendingBurstMeasurements) {
             pendingBurstMeasurements.clear()
             burstInProgress = true
+            suspendedAtBurstStartUs = suspendedTimeMicros()
         }
 
         try {
@@ -163,12 +215,30 @@ class TimeSyncManager(
         synchronized(pendingBurstMeasurements) {
             burstInProgress = false
 
+            val suspendedNowUs = suspendedTimeMicros()
+            val sleptUs = suspendedNowUs - suspendedAtLastBurstUs
+            suspendedAtLastBurstUs = suspendedNowUs
+            sleptSinceLastBurst = false
+            // Normally checkForSleep has found it already, on a frame
+            if (sleptUs > SLEEP_STEP_US) startOverAfterSleep(sleptUs)
+            if (suspendedNowUs - suspendedAtBurstStartUs > SLEEP_STEP_US) {
+                // This burst's round trips span the sleep
+                pendingBurstMeasurements.clear()
+                return@synchronized
+            }
+            // All of this burst came after it: it is the first measurement
+            if (sleptUs > SLEEP_STEP_US) immediateBursts = BURSTS_AFTER_SLEEP - 1
+
             if (pendingBurstMeasurements.isEmpty()) {
                 Log.w(tag, "No time sync responses received in burst")
                 return
             }
 
-            val validMeasurements = pendingBurstMeasurements.filter { it.rtt < MAX_ACCEPTABLE_RTT_US }
+            // A round trip that leaves no positive max_error is one the filter
+            // skips, so it must not win the burst
+            val validMeasurements = pendingBurstMeasurements.filter {
+                it.rtt < MAX_ACCEPTABLE_RTT_US && computeMaxError(it.rtt) > 0
+            }
             if (validMeasurements.isEmpty()) {
                 Log.w(tag, "All ${pendingBurstMeasurements.size} responses had RTT > ${MAX_ACCEPTABLE_RTT_US / 1_000_000}s - skipping burst")
                 pendingBurstMeasurements.clear()
@@ -200,7 +270,36 @@ class TimeSyncManager(
         onMeasurementApplied()
     }
 
-    private fun computeMaxError(rtt: Long): Long = (rtt / 2L).coerceAtLeast(1L)
+    /**
+     * Notice a sleep on the first frame after it, before anything in that
+     * frame is translated, rather than at the next burst, up to an interval
+     * later: the filter starts over and the burst loop is woken. Call on
+     * every inbound frame. Safe from any thread.
+     */
+    fun checkForSleep() {
+        if (!running) return
+        synchronized(pendingBurstMeasurements) {
+            val nowUs = suspendedTimeMicros()
+            val sleptUs = nowUs - suspendedAtLastBurstUs
+            if (sleptUs <= SLEEP_STEP_US) return
+            suspendedAtLastBurstUs = nowUs
+            sleptSinceLastBurst = true
+            startOverAfterSleep(sleptUs)
+            // The burst the wake-up starts is the first of them
+            immediateBursts = BURSTS_AFTER_SLEEP - 1
+        }
+        onMeasurementApplied()
+        wakeLoop.trySend(Unit)
+    }
+
+    /** The filter starts over, with bursts back to back. Guarded by pendingBurstMeasurements. */
+    private fun startOverAfterSleep(sleptUs: Long) {
+        Log.i(tag, "Device was asleep for ${sleptUs / 1000}ms - starting time sync over")
+        timeFilter.reset()
+        immediateBursts = BURSTS_AFTER_SLEEP
+    }
+
+    private fun computeMaxError(rtt: Long): Long = rtt / 2L
 
     private fun recordRtt(rtt: Long) {
         rttHistory[rttHistoryIndex] = rtt

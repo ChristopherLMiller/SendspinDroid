@@ -117,6 +117,23 @@ class SendSpinProtocolHandlerTest {
         assertEquals("Song B", handler.metadataUpdates[1].title)
     }
 
+    // ========== Deep sleep ==========
+
+    @Test
+    fun `a frame after a deep sleep starts time sync over before it is handled`() {
+        var suspendedUs = 0L
+        handler.startTimeSyncForTest { suspendedUs }
+        val filter = handler.exposedTimeFilter()
+        filter.addMeasurement(10_000L, 2_000L, 1_000_000L)
+        filter.addMeasurement(10_000L, 2_000L, 2_000_000L)
+        assertTrue(filter.isReady)
+
+        suspendedUs += 5_000_000L  // the server's frame woke the device
+        handler.handleBinaryMessageForTest(byteArrayOf(0) + "{\"type\":\"group/update\",\"payload\":{}}".toByteArray())
+
+        assertFalse(filter.isReady)
+    }
+
     // ========== External Source Tests ==========
 
     @Test
@@ -659,8 +676,8 @@ class TestProtocolHandler : SendSpinProtocolHandler("TestHandler") {
 
     fun sendClientTimeForTest() = sendClientTime()
     /** Time sync running, with nothing sent until the test asks or virtual time advances. */
-    fun startTimeSyncForTest() {
-        initTimeSyncManager(timeFilter)
+    fun startTimeSyncForTest(suspendedTimeMicros: () -> Long = { 0L }) {
+        initTimeSyncManager(timeFilter, suspendedTimeMicros)
         startTimeSync()
     }
 
