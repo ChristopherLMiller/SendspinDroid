@@ -138,6 +138,46 @@ class SendSpinProtocolHandlerTest {
 
     // ========== External Source Tests ==========
 
+    /** One audio chunk as the transport delivers it: `[4][timestamp][send_ahead][data]`. */
+    private fun audioFrame(timestampUs: Long): ByteArray =
+        java.nio.ByteBuffer.allocate(1 + 8 + 4 + 4).put(4.toByte()).putLong(timestampUs).putInt(0)
+            .put(byteArrayOf(1, 2, 3, 4)).array()
+
+    @Test
+    fun `a new connection keeps reporting the output another app holds`() {
+        handler.setExternalSource(true)
+        handler.resetSyncStateTrackingForTest()  // what a dial runs, reconnects included
+        val filter = handler.exposedTimeFilter()
+        for (i in 1..30) filter.addMeasurement(10_000L, 3000L, i * 1_000_000L)
+        handler.sentMessages.clear()
+        handler.evaluateAndPublishSyncStateForTest()
+
+        assertTrue(handler.isExternalSourceActive)
+        assertFalse(handler.exposedIsAvailable())
+    }
+
+    @Test
+    fun `audio is discarded while another app owns the output`() {
+        handler.handleTextMessageForTest(buildStreamStartJson(codec = "pcm", sampleRate = 48000, channels = 2, bitDepth = 16))
+        handler.handleBinaryMessageForTest(audioFrame(1_000L))
+        handler.setExternalSource(true)
+        handler.handleBinaryMessageForTest(audioFrame(2_000L))
+        handler.setExternalSource(false)
+        handler.handleBinaryMessageForTest(audioFrame(3_000L))
+
+        assertEquals(listOf(1_000L, 3_000L), handler.audioChunks.map { it.first })
+    }
+
+    @Test
+    fun `losing and regaining the player role is reported`() {
+        handler.playerRoleChanges.clear()  // the activation in setUp added it
+        activateRoles("\"controller@v1\"")
+        activateRoles("\"controller@v1\"")
+        activateRoles("\"player@v1\",\"controller@v1\"")
+
+        assertEquals(listOf(false, true), handler.playerRoleChanges)
+    }
+
     @Test
     fun `setExternalSource true reports available false`() {
         activateRoles("\"player@v1\"")
@@ -696,6 +736,11 @@ class TestProtocolHandler(
     /** What reached the wire and when the connection was closed, in order. */
     val events = mutableListOf<String>()
     val audioChunks = mutableListOf<Pair<Long, ByteArray>>()
+    val playerRoleChanges = mutableListOf<Boolean>()
+
+    override fun onPlayerRoleChanged(active: Boolean) {
+        playerRoleChanges += active
+    }
     val protocolFailures = mutableListOf<String>()
 
     override fun matchedPskCategory(): PskCategory = matchedCategory

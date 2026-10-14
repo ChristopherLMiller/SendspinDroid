@@ -211,6 +211,12 @@ abstract class SendSpinProtocolHandler(
      */
     protected abstract fun onAudioChunk(timestampMicros: Long, audioData: ByteArray)
 
+    /**
+     * The player role was added to or removed from `active_roles` by a
+     * `server/activate`. A removal has already stopped the output.
+     */
+    protected open fun onPlayerRoleChanged(active: Boolean) {}
+
     /** Store the output delay a server set, so it survives a restart. */
     protected open fun persistOutputDelayMs(delayMs: Int) {}
 
@@ -548,6 +554,14 @@ abstract class SendSpinProtocolHandler(
         }
     }
 
+    /** Whether this client reports `available: false` because another app owns the output. */
+    val isExternalSourceActive: Boolean
+        get() = synchronized(syncStateLock) { externalSourceActive }
+
+    /** Whether the connection has the player role. */
+    val playerRoleActive: Boolean
+        get() = SendSpinProtocol.Roles.PLAYER in activeRoles
+
     /**
      * Report or clear the 'external_source' client state (spec: output is
      * in use by an external system, e.g. another app holds audio focus).
@@ -626,8 +640,9 @@ abstract class SendSpinProtocolHandler(
     fun resetSyncStateTracking() {
         val needsUnmute = synchronized(syncStateLock) {
             hasEverConverged = false
-            externalSourceActive = false
-            currentSyncState = "error"
+            // Another app holding the output is a fact about the device, not
+            // the connection: a new one still reports it
+            currentSyncState = if (externalSourceActive) "external_source" else "error"
             if (lastPublishedMute) {
                 lastPublishedMute = false
                 true
@@ -1240,12 +1255,14 @@ abstract class SendSpinProtocolHandler(
                     return
                 }
                 val removedRoles = activeRoles - outcome.activeRoles.toSet()
+                val wasPlayer = SendSpinProtocol.Roles.PLAYER in activeRoles
                 activities = activate.activities
                 activeRoles = outcome.activeRoles
                 activationSeen = true
                 Log.i(tag, "server/activate accepted: activities=${activate.activities} " +
                     "roles=${outcome.activeRoles}")
                 if (removedRoles.isNotEmpty()) discardRemovedRoles(removedRoles)
+                if (wasPlayer != playerRoleActive) onPlayerRoleChanged(playerRoleActive)
                 onAdmissionStateChanged(
                     AdmissionState.from(activate.activities, outcome.activeRoles)
                 )
@@ -2160,6 +2177,10 @@ abstract class SendSpinProtocolHandler(
                     return
                 }
                 measureChunkDelay(message)
+                // "During an active stream, unavailable clients SHOULD discard
+                // otherwise valid audio data": what the server sent before our
+                // `available: false` reached it, until its stream/end.
+                if (isExternalSourceActive) return
                 onAudioChunk(message.timestampMicros, message.payload)
             }
         }
