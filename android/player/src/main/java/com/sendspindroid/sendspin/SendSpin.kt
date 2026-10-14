@@ -168,10 +168,11 @@ class SendSpin(
 
         /**
          * Called when audio output should be silenced or unsilenced because
-         * the client cannot maintain sync. Per Sendspin spec, "error" state
-         * mutes audio while continuing to drain the buffer. Implementations
-         * should forward this to the audio sink. Default no-op for callers
-         * that don't render audio.
+         * the clock filter lost the convergence it had, or regained it. Audio
+         * keeps draining in sync while muted. A local policy: the spec has no
+         * state for it, and the client stays `available: true`.
+         * Implementations should forward this to the audio sink. Default
+         * no-op for callers that don't render audio.
          */
         fun onSyncMuteChanged(muted: Boolean) {}
 

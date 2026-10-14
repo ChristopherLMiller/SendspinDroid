@@ -106,7 +106,7 @@ object SendSpinProtocol {
      * This filters out network jitter by selecting the measurement with least congestion.
      */
     object TimeSync {
-        const val INTERVAL_MS = 250L          // Send time sync 4x per second
+        const val INTERVAL_MS = 250L          // Wait between bursts until TimeSyncManager adapts it
         const val BURST_COUNT = 10            // Send 10 packets per burst
         const val BURST_DELAY_MS = 50L        // 50ms between burst packets
     }
