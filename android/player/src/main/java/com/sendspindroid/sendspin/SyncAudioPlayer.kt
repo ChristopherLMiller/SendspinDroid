@@ -241,9 +241,10 @@ class SyncAudioPlayer(
         // is left ahead of the playback head, where the mixer reads
         private const val DRY_AHEAD_US = 10_000L
 
-        // After the output ran dry, the silence the keepalive keeps ahead of
-        // the playback head until playback starts again
-        private const val POST_DRY_CUSHION_US = 50_000L
+        // The least the track itself holds ahead of its playback head, where
+        // the mixer reads, whatever the timestamp counts below it; after the
+        // output ran dry, all the silence the keepalive keeps there
+        private const val TRACK_CUSHION_US = 50_000L
 
         // DAC-position-aware startup alignment
         private const val TARGET_PENDING_US = 250_000L      // 250ms target write-to-DAC distance
@@ -366,7 +367,7 @@ class SyncAudioPlayer(
     private var lastDacTimestampNs = Long.MIN_VALUE   // timestamp behind the last dacTimeOfNextWriteUs() value
 
     // After the output has run dry the keepalive keeps only a small cushion,
-    // POST_DRY_CUSHION_US ahead of the playback head, so audio arriving just
+    // TRACK_CUSHION_US ahead of the playback head, so audio arriving just
     // in time is placed on time instead of behind 200 ms of silence and
     // dropped as late. Measured at the head, not by the timestamp: that also
     // counts the latency below the mixer, which on Bluetooth is more than the
@@ -1477,17 +1478,25 @@ class SyncAudioPlayer(
             // A small cushion ahead of the playback head: the head is always
             // there, timestamp or not, so the depth is always known.
             val aheadUs = writtenAheadUs(track)
-            if (aheadUs <= POST_DRY_CUSHION_US) {
-                writeSilence(track, ((POST_DRY_CUSHION_US - aheadUs) * sampleRate) / 1_000_000 + silenceFrameCount)
+            if (aheadUs <= TRACK_CUSHION_US) {
+                writeSilence(track, ((TRACK_CUSHION_US - aheadUs) * sampleRate) / 1_000_000 + silenceFrameCount)
             }
         } else {
             val pendingUs = getPendingToDacUs(track)
-            if (pendingUs <= SILENCE_KEEPALIVE_THRESHOLD_US) {
+            val aheadUs = writtenAheadUs(track)
+            if (pendingUs <= SILENCE_KEEPALIVE_THRESHOLD_US || aheadUs <= TRACK_CUSHION_US) {
                 // Top the buffer back up to the threshold plus one 10ms block. A fixed
                 // 10ms per loop iteration is slightly less than real time, so the track
                 // would drain and sit in permanent underrun. Without a timestamp
-                // (pendingUs == 0) the depth is unknown, so write the one block only.
-                val deficitUs = if (pendingUs > 0) SILENCE_KEEPALIVE_THRESHOLD_US - pendingUs else 0L
+                // (pendingUs == 0) the depth is unknown, so only the floor below
+                // applies. The threshold is measured by the timestamp, which counts
+                // the latency below the mixer: where that is more than the
+                // threshold the track itself would starve, so it never holds less
+                // than the cushion ahead of its playback head.
+                val deficitUs = maxOf(
+                    if (pendingUs > 0) SILENCE_KEEPALIVE_THRESHOLD_US - pendingUs else 0L,
+                    TRACK_CUSHION_US - aheadUs,
+                ).coerceAtLeast(0L)
                 writeSilence(track, (deficitUs * sampleRate) / 1_000_000 + silenceFrameCount)
             }
         }
@@ -1599,15 +1608,20 @@ class SyncAudioPlayer(
         // Left PLAYING without a reset: the output ran dry, a gap was already
         // passed, or an early realignment. No one-shot drop meant for the
         // audio before carries over, and only a small cushion of silence is
-        // kept meanwhile (postDryCushion). A track still giving fresh
-        // timestamps is running and start gating can use them at once;
-        // otherwise its checks start over, from fresh reads. The wait for a
-        // timestamp restarts only on an output that has been giving them: one
-        // that never has keeps starting from the playback head.
+        // kept meanwhile (postDryCushion). A track with frames still ahead of
+        // its playback head, and giving fresh timestamps, is running: the
+        // cushion lands before the mixer next reads, and start gating can use
+        // the timestamps at once. Once the mixer has taken everything it may
+        // already have mixed a cycle without the track, a gap the last
+        // timestamp knows nothing of, and one under the age limit can be a
+        // stalled track's, frozen. So its checks start over, from fresh
+        // reads. The wait for a timestamp restarts only on an output that has
+        // been giving them: one that never has keeps starting from the
+        // playback head.
         val state = playbackState
         if (loopWasPlaying && state != PlaybackState.PLAYING) {
             val track = audioSink
-            if (track == null || dacTimeOfNextWriteUs(track) == null) {
+            if (track == null || writtenAheadUs(track) == 0L || dacTimeOfNextWriteUs(track) == null) {
                 consecutiveValidTimestamps = 0
                 dacTimestampsStable = false
                 val nowUs = nowNs() / 1000
@@ -1692,8 +1706,13 @@ class SyncAudioPlayer(
                 "smoothed=${syncErrorFilter.offsetMicros}us, dropped=$framesDropped, inserted=$framesInserted")
         }
 
-        // Pause writing when the AudioTrack buffer is sufficiently full
-        if (pendingToDacUs > TARGET_PENDING_US + PENDING_TOL_US) {
+        // Pause writing when the AudioTrack buffer is sufficiently full. The
+        // depth counts the latency below the mixer: where that is more than
+        // the target, the track itself would starve, so it is kept fed to
+        // the cushion ahead of its playback head regardless.
+        if (pendingToDacUs > TARGET_PENDING_US + PENDING_TOL_US &&
+            audioSink.let { it == null || writtenAheadUs(it) > TRACK_CUSHION_US }
+        ) {
             return STATE_POLL_DELAY_MS
         }
 

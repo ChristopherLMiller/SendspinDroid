@@ -141,6 +141,7 @@ class SyncAudioPlayerLoopTest {
     // sink had seen.
     private var dacTimeOfNextWriteUs = 0L
     private var writesBeforeTick = 0
+    private var framesBeforeStep = 0L
 
     // Report positions in their low 32 bits only, as AudioTrack does
     private var wrapPositions = false
@@ -179,6 +180,7 @@ class SyncAudioPlayerLoopTest {
         dacTimeOfNextWriteUs = nowUs + (framesInTrack() - head) * 1_000_000L / sampleRate +
             if (timestamp != null) latencyUs else 0L
         writesBeforeTick = sink.writes.size
+        framesBeforeStep = framesInTrack()
         if (!burst) {
             step()
             return
@@ -312,7 +314,9 @@ class SyncAudioPlayerLoopTest {
         queueStream(nowUs + 400_000L, count = 100, tag = 2)
         tick()
         assertEquals("the loop flushed the track", flushesBefore + 1, sink.flushCallCount.get())
-        assertEquals("only fresh silence in the track", sampleRate / 100L, framesInTrack())
+        assertEquals("only fresh silence in the track",
+            sink.writes.drop(writesBeforeTick).sumOf { it.size } / bytesPerFrame.toLong(), framesInTrack())
+        assertTrue(audioTagsWrittenSince(writesBeforeTick).isEmpty())
         assertEquals(PlaybackState.WAITING_FOR_START, player.getPlaybackState())
 
         tickUntilPlaying()
@@ -833,7 +837,8 @@ class SyncAudioPlayerLoopTest {
         assertEquals(PlaybackState.INITIALIZING, player.getPlaybackState())
         repeat(30) {
             tick()
-            assertTrue("the track ran dry at the mixer", head < framesInTrack())
+            assertTrue("the track ran dry at the mixer", head < framesBeforeStep)
+            assertTrue("no cushion ahead of the head", (framesBeforeStep - head) * 1_000_000L / sampleRate >= 30_000L)
         }
         val dropped = player.getStats().chunksDropped
 
@@ -874,7 +879,7 @@ class SyncAudioPlayerLoopTest {
         repeat(300) {
             feed()
             tick()
-            assertTrue("the track ran dry at the mixer", head < framesInTrack())
+            assertTrue("the track ran dry at the mixer", head < framesBeforeStep)
         }
 
         assertEquals(0L, player.getStats().bufferUnderrunCount)
@@ -885,8 +890,10 @@ class SyncAudioPlayerLoopTest {
     fun `an output that never yields a timestamp restarts at once after running dry`() {
         queueStream(nowUs + 300_000L, count = 20, tag = 99)
         tickUntilPlaying(timestamps = false, maxTicks = 100)
-        repeat(100) { tick(timestamps = false) }
+        repeat(100) { if (player.getPlaybackState() == PlaybackState.PLAYING) tick(timestamps = false) }
         assertEquals(PlaybackState.INITIALIZING, player.getPlaybackState())
+        // Well inside the 500 ms that a restarted wait for a timestamp would hold
+        repeat(5) { tick(timestamps = false) }
         val dropped = player.getStats().chunksDropped
 
         val firstServerTimeUs = nowUs + 120_000L
@@ -896,6 +903,122 @@ class SyncAudioPlayerLoopTest {
         assertEquals("nothing on time is dropped", dropped, player.getStats().chunksDropped)
         val errorUs = startErrorUs(firstServerTimeUs)
         assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    /**
+     * Play a short stream until the output runs dry. It starts 5 ms off the
+     * 10 ms grid the simulated mixer reads on, so the dry check finds 5 ms
+     * still ahead of the head. With [burst] the loop runs on at once after
+     * the check, as on the audio thread, before the mixer reads again;
+     * without, the mixer reads first, takes those 5 ms and leaves a gap.
+     */
+    private fun playUntilDry(burst: Boolean) {
+        queueStream(nowUs + 605_000L, count = 20, tag = 99)
+        tickUntilPlaying()
+        repeat(200) { if (player.getPlaybackState() == PlaybackState.PLAYING) tick(burst = burst) }
+        assertEquals(PlaybackState.INITIALIZING, player.getPlaybackState())
+        assertEquals(1L, player.getStats().bufferUnderrunCount)
+    }
+
+    /** When a frame written now reaches the DAC of the simulated track. */
+    private fun writeCursorDacTimeUs(): Long =
+        nowUs + (framesInTrack() - head) * 1_000_000L / sampleRate + latencyUs
+
+    private fun audioRightAfterDryStartsAtOnce() {
+        playUntilDry(burst = true)
+        val dropped = player.getStats().chunksDropped
+
+        // Due just behind what the track holds
+        val firstServerTimeUs = writeCursorDacTimeUs() + 5_000L
+        queueNumberedStream(firstServerTimeUs, count = 50)
+        tickUntilPlaying(maxTicks = 1)
+
+        assertEquals("nothing on time is dropped", dropped, player.getStats().chunksDropped)
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `audio arriving right after the output ran dry starts at once against the running track`() =
+        audioRightAfterDryStartsAtOnce()
+
+    @Test
+    fun `on a high-latency output audio arriving right after it ran dry starts at once`() {
+        latencyTicks = 15
+        audioRightAfterDryStartsAtOnce()
+    }
+
+    @Test
+    fun `a track the mixer has already emptied when the loop finds it dry waits for fresh timestamps`() {
+        freezeStalledTimestamps = true
+        playUntilDry(burst = false)
+
+        // The last timestamp is fresh, but the 5 ms gap behind it is not in it
+        val firstServerTimeUs = writeCursorDacTimeUs() + 5_000L
+        queueNumberedStream(firstServerTimeUs, count = 50)
+        tickUntilPlaying(maxTicks = 10)
+
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `an output whose timestamps stop before it runs dry waits for them again`() {
+        queueNumberedStream(nowUs + 400_000L, count = 70)
+        tickUntilPlaying()
+        repeat(200) { if (queuedSamples() > 0L) tick() }
+        assertEquals(0L, queuedSamples())
+        val lastTimestampUs = nowUs
+        repeat(100) { if (player.getPlaybackState() == PlaybackState.PLAYING) tick(timestamps = false) }
+        assertEquals(PlaybackState.INITIALIZING, player.getPlaybackState())
+        assertTrue("ran dry within the wait for a timestamp", nowUs - lastTimestampUs < 400_000L)
+
+        // Not started from the playback head while the restarted wait lasts
+        val firstServerTimeUs = nowUs + 150_000L
+        queueNumberedStream(firstServerTimeUs, count = 50)
+        repeat(30) {
+            tick(timestamps = false)
+            assertEquals(PlaybackState.WAITING_FOR_START, player.getPlaybackState())
+        }
+
+        tickUntilPlaying(maxTicks = 10)
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `on an output with more latency below the mixer than the keepalive target the start is on time`() {
+        latencyTicks = 25  // 250 ms
+        freezeStalledTimestamps = true
+        repeat(60) { tick() }
+        repeat(60) {
+            tick()
+            assertTrue("the track ran dry at the mixer", head < framesBeforeStep)
+        }
+
+        val firstServerTimeUs = nowUs + 600_000L
+        queueNumberedStream(firstServerTimeUs, count = 50)
+        tickUntilPlaying(maxTicks = 60)
+        // Behind the silence padded to the start, the track holds enough for
+        // pacing to let the first audio wait a tick
+        repeat(5) { if (audioTagsWrittenSince(writesBeforeTick).isEmpty()) tick() }
+
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("start is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `on an output with more latency below the mixer than the pacing target the track stays fed`() {
+        latencyTicks = 35  // 350 ms
+        freezeStalledTimestamps = true
+        queueNumberedStream(nowUs + 800_000L, count = 200)
+        tickUntilPlaying(maxTicks = 100)
+        repeat(150) {
+            tick()
+            assertTrue("the track ran dry at the mixer", head < framesBeforeStep)
+        }
+        assertEquals(PlaybackState.PLAYING, player.getPlaybackState())
+        assertEquals(0L, player.getStats().bufferUnderrunCount)
     }
 
     @Test
