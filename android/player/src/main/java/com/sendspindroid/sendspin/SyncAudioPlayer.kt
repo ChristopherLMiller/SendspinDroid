@@ -419,6 +419,9 @@ class SyncAudioPlayer(
     // Why the output is silenced; audible only when empty. Written on the main thread.
     @Volatile private var muteReasons: Set<MuteReason> = emptySet()
 
+    // Gain on the track while not muted (see setVolume). Written on the main thread.
+    @Volatile private var trackGain = 1f
+
     // 2D Kalman filter for sync error smoothing (tracks offset + drift)
     private val syncErrorFilter = SyncErrorFilter.forDacSyncError()
 
@@ -523,7 +526,7 @@ class SyncAudioPlayer(
 
         try {
             audioSink = sinkFactory(sampleRate, channels, bitDepth, bufferSize)
-            if (muteReasons.isNotEmpty()) audioSink?.setVolume(0f)
+            if (muteReasons.isNotEmpty() || trackGain != 1f) applyGain()
 
             PlayerLog.Audio.i("AudioTrack initialized: ${sampleRate}Hz, ${channels}ch, ${bitDepth}bit, buffer=${bufferSize}bytes")
         } catch (e: Exception) {
@@ -675,20 +678,17 @@ class SyncAudioPlayer(
     }
 
     /**
-     * Set the playback volume.
+     * Set the gain on the track, 0.0 to 1.0, on top of the device volume.
      *
-     * Note: Volume is now controlled via device STREAM_MUSIC (AudioManager),
-     * not per-AudioTrack gain. This method is kept for API compatibility but
-     * AudioTrack always plays at full volume. Device volume handles attenuation.
+     * Volume is mostly the device's STREAM_MUSIC index, so the hardware keys
+     * work; this is what is left between the index and the volume asked for.
+     * A mute still silences the output whatever the gain.
      *
-     * @param volume Volume level from 0.0 (mute) to 1.0 (full volume) - ignored
+     * Main thread only.
      */
-    @Suppress("UNUSED_PARAMETER")
     fun setVolume(volume: Float) {
-        // Volume is now controlled via device STREAM_MUSIC, not AudioTrack gain.
-        // AudioTrack plays at full volume; device media stream handles attenuation.
-        // This follows Spotify/Plexamp best practices for hardware volume button support.
-        PlayerLog.Audio.d("setVolume called (ignored - using device volume): $volume")
+        trackGain = volume.coerceIn(0f, 1f)
+        applyGain()
     }
 
     /** Why the output is muted. The reasons are independent; any one silences it. */
@@ -717,8 +717,12 @@ class SyncAudioPlayer(
      */
     fun setMuted(reason: MuteReason, muted: Boolean) {
         muteReasons = if (muted) muteReasons + reason else muteReasons - reason
-        audioSink?.setVolume(if (muteReasons.isEmpty()) 1f else 0f)
+        applyGain()
         PlayerLog.Audio.i("Mute $reason=$muted, muted by $muteReasons")
+    }
+
+    private fun applyGain() {
+        audioSink?.setVolume(if (muteReasons.isEmpty()) trackGain else 0f)
     }
 
     /**

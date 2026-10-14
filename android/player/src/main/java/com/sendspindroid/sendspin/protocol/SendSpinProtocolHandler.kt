@@ -723,7 +723,8 @@ abstract class SendSpinProtocolHandler(
      * @param volume Volume level from 0.0 to 1.0
      */
     fun setVolume(volume: Double) {
-        val volumePercent = (volume * 100).toInt().coerceIn(0, 100)
+        // Rounded: 0.29f widens to 0.28999..., which truncates to 28
+        val volumePercent = kotlin.math.round(volume * 100).toInt().coerceIn(0, 100)
         currentVolume = volumePercent
         Log.d(tag, "setVolume: $volumePercent%")
         sendPlayerStateUpdate()

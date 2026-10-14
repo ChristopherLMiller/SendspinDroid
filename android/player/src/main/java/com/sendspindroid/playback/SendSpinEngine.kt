@@ -106,6 +106,9 @@ class SendSpinEngine(
     // Everything done to the output is done to them too. Main thread only.
     private val retiredPlayers = mutableListOf<SyncAudioPlayer>()
 
+    // Track gain kept across players (see setTrackGain)
+    private var trackGain = 1f
+
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
 
     /**
@@ -420,6 +423,17 @@ class SendSpinEngine(
     }
 
     /**
+     * Gain on the output, 0.0 to 1.0, on top of the device volume: the part
+     * of a volume the device's volume index cannot reach. Kept and applied to
+     * every later player. Main thread only.
+     */
+    fun setTrackGain(gain: Float) {
+        trackGain = gain
+        retiredPlayers.forEach { it.setVolume(gain) }
+        player?.setVolume(gain)
+    }
+
+    /**
      * Stop the decode worker and release the output. The engine cannot be
      * used afterwards.
      */
@@ -681,6 +695,7 @@ class SendSpinEngine(
             setMuted(SyncAudioPlayer.MuteReason.PLAYER, playerMuted())
             setMuted(SyncAudioPlayer.MuteReason.INTERRUPTION, SyncAudioPlayer.MuteReason.INTERRUPTION in heldMutes)
             setMuted(SyncAudioPlayer.MuteReason.VOICE, SyncAudioPlayer.MuteReason.VOICE in heldMutes)
+            setVolume(trackGain)
             initialize()
             start()
         }
