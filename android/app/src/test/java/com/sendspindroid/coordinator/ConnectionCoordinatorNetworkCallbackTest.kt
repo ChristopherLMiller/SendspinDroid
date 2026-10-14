@@ -97,6 +97,14 @@ class ConnectionCoordinatorNetworkCallbackTest {
         return events
     }
 
+    /** The addresses of each event, which must all be address changes. */
+    private fun addressChanges(events: List<NetworkEvent>): List<Set<InetAddress>> = events.map { event ->
+        assertTrue("not an address change: $event", event is NetworkEvent.LinkAddressesChanged)
+        (event as NetworkEvent.LinkAddressesChanged).addresses.map { it.address }.toSet()
+    }
+
+    private fun ips(vararg ips: String): Set<InetAddress> = ips.map { InetAddress.getByName(it) }.toSet()
+
     @Test
     fun `below API 31 follows the default network`() = runTest {
         val coordinator = coordinator()
@@ -142,10 +150,11 @@ class ConnectionCoordinatorNetworkCallbackTest {
     fun `a new network after the old one is gone is an identity change`() = runTest {
         val events = coordinatorEvents()
         val wifi = network(1L)
-        becomesBest(wifi, capabilities())
+        becomesBest(wifi, capabilities(), properties(address("10.0.1.6", 22)))
 
+        // Cellular's addresses are a new baseline, not a change from Wi-Fi's.
         gone(wifi)
-        becomesBest(network(2L), capabilities())
+        becomesBest(network(2L), capabilities(), properties(address("10.201.7.9", 30)))
         testScheduler.runCurrent()
 
         assertEquals(listOf<NetworkEvent>(NetworkEvent.IdentityChanged(2L)), events)
@@ -160,12 +169,141 @@ class ConnectionCoordinatorNetworkCallbackTest {
 
         // Wi-Fi lost validation (an ISP outage): cellular takes over while
         // Wi-Fi stays connected, and so does a LAN connection open on it.
-        // Its addresses are a new baseline, not a change from Wi-Fi's.
+        // Cellular's addresses are reported, to refresh what depends on them.
         stillUp(wifi, wifiCaps)
         becomesBest(network(2L), capabilities(), properties(address("10.201.7.9", 30)))
         testScheduler.runCurrent()
 
-        assertTrue("no event while Wi-Fi is still up: $events", events.isEmpty())
+        assertEquals(listOf(ips("10.201.7.9")), addressChanges(events))
+    }
+
+    @Test
+    fun `Wi-Fi back while cellular is still up is an address change`() = runTest {
+        val events = coordinatorEvents()
+        val wifi = network(1L)
+        becomesBest(wifi, capabilities(), properties(address("10.0.1.6", 22)))
+        gone(wifi)
+        val cell = network(2L)
+        val cellCaps = capabilities()
+        becomesBest(cell, cellCaps, properties(address("10.201.7.9", 30)))
+
+        // The router is back: Wi-Fi rejoins as a new network, while cellular
+        // lingers. The advertisement was last refreshed on cellular alone.
+        // Only its first addresses are reported, not every refresh of them.
+        stillUp(cell, cellCaps)
+        val wifi2 = network(3L)
+        becomesBest(wifi2, capabilities(), properties(address("10.0.1.7", 22)))
+        callback.captured.onLinkPropertiesChanged(wifi2, properties(address("10.0.1.7", 22)))
+        testScheduler.runCurrent()
+
+        assertEquals(NetworkEvent.IdentityChanged(2L), events.first())
+        assertEquals(listOf(ips("10.0.1.7")), addressChanges(events.drop(1)))
+    }
+
+    @Test
+    fun `a return to the network left while it was up is not an identity change`() = runTest {
+        val events = coordinatorEvents()
+        val wifi = network(1L)
+        val wifiCaps = capabilities()
+        becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+
+        // Cellular takes over while Wi-Fi stays up, then goes: Wi-Fi is the
+        // network a LAN connection has been on all along. Each network's
+        // addresses are reported as it is followed.
+        stillUp(wifi, wifiCaps)
+        val cell = network(2L)
+        becomesBest(cell, capabilities(), properties(address("10.201.7.9", 30)))
+        gone(cell)
+        becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+        testScheduler.runCurrent()
+
+        assertEquals(listOf(ips("10.201.7.9"), ips("10.0.1.6")), addressChanges(events))
+    }
+
+    @Test
+    fun `a return after several switches is to the first network left`() = runTest {
+        val events = coordinatorEvents()
+        val wifi = network(1L)
+        val wifiCaps = capabilities()
+        becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+
+        // Wi-Fi -> cellular -> Ethernet, each left still up, then Ethernet
+        // goes and Wi-Fi is best again.
+        stillUp(wifi, wifiCaps)
+        val cell = network(2L)
+        val cellCaps = capabilities()
+        becomesBest(cell, cellCaps, properties(address("10.201.7.9", 30)))
+        stillUp(cell, cellCaps)
+        val ethernet = network(3L)
+        becomesBest(ethernet, capabilities(), properties(address("10.0.1.8", 22)))
+        gone(ethernet)
+        becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+        testScheduler.runCurrent()
+
+        assertTrue("no identity change back on Wi-Fi: $events", events.none { it is NetworkEvent.IdentityChanged })
+    }
+
+    @Test
+    fun `an identity change forgets the network left before it`() = runTest {
+        val events = coordinatorEvents()
+        val wifi = network(1L)
+        val wifiCaps = capabilities()
+        becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+        stillUp(wifi, wifiCaps)
+        val cell = network(2L)
+        becomesBest(cell, capabilities(), properties(address("10.201.7.9", 30)))
+
+        // Wi-Fi and cellular both go; a connection now has to be on Ethernet.
+        gone(wifi)
+        gone(cell)
+        val ethernet = network(3L)
+        val ethernetCaps = capabilities()
+        becomesBest(ethernet, ethernetCaps, properties(address("10.0.1.8", 22)))
+
+        // Ethernet is left while up, and returned to.
+        stillUp(ethernet, ethernetCaps)
+        val cell2 = network(4L)
+        becomesBest(cell2, capabilities(), properties(address("10.201.7.10", 30)))
+        gone(cell2)
+        becomesBest(ethernet, ethernetCaps, properties(address("10.0.1.8", 22)))
+        testScheduler.runCurrent()
+
+        assertEquals(
+            listOf<NetworkEvent>(NetworkEvent.IdentityChanged(3L)),
+            events.filterIsInstance<NetworkEvent.IdentityChanged>(),
+        )
+    }
+
+    /**
+     * Signal strength and bandwidth estimates resend the followed network's
+     * capabilities; an address added after that is still a change from the
+     * baseline, and the only event.
+     */
+    private fun TestScope.capabilitiesAgainThenAnAddress(goingAway: Boolean): List<NetworkEvent> {
+        val events = coordinatorEvents()
+        val wifi = network(1L)
+        val wifiCaps = capabilities()
+        becomesBest(wifi, wifiCaps, properties(address("10.0.1.6", 22)))
+        if (goingAway) gone(wifi)
+
+        callback.captured.onCapabilitiesChanged(wifi, wifiCaps)
+        callback.captured.onLinkPropertiesChanged(wifi, properties(address("10.0.1.6", 22), address("2001:db8::1")))
+        testScheduler.runCurrent()
+        return events
+    }
+
+    @Test
+    fun `the followed network's capabilities coming again is not a switch`() = runTest {
+        val events = capabilitiesAgainThenAnAddress(goingAway = false)
+
+        assertEquals(listOf(ips("10.0.1.6", "2001:db8::1")), addressChanges(events))
+    }
+
+    @Test
+    fun `the followed network's capabilities coming again as it goes is not an identity change`() = runTest {
+        val events = capabilitiesAgainThenAnAddress(goingAway = true)
+
+        assertEquals(listOf(ips("10.0.1.6", "2001:db8::1")), addressChanges(events))
     }
 
     @Test
