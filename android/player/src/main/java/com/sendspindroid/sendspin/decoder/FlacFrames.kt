@@ -9,7 +9,9 @@ package com.sendspindroid.sendspin.decoder
  * ends with a CRC-16 over the whole frame. A frame boundary is taken only
  * where both hold: a header starts there and the bytes before it end with the
  * CRC-16 of the frame they close, so audio data that happens to look like a
- * sync code does not split a frame. Frame layout per RFC 9639, section 9.
+ * sync code does not split a frame. That CRC is kept running from the start of
+ * the frame: one followed by its own CRC-16 leaves 0, so the scan is linear
+ * whatever the chunk holds. Frame layout per RFC 9639, section 9.
  */
 object FlacFrames {
 
@@ -28,18 +30,17 @@ object FlacFrames {
         val frames = ArrayList<Frame>(1)
         var start = 0
         var samples = 0L
-        var p = 1
-        while (p + 1 < chunk.size) {
-            if (isSyncCode(chunk, p) && p - start >= MIN_FRAME_BYTES) {
-                val next = headerBlockSize(chunk, p)
-                if (next >= 0 && closesFrame(chunk, start, p)) {
-                    frames += Frame(chunk.copyOfRange(start, p), timestampUs + samples * 1_000_000L / sampleRate)
-                    samples += blockSize
-                    start = p
-                    blockSize = next
-                }
-            }
-            p++
+        var crc = 0  // CRC-16 of [start, p)
+        for (p in 1 until chunk.size - 1) {
+            crc = crc16Step(crc, chunk[p - 1])
+            if (crc != 0 || p - start < MIN_FRAME_BYTES || !isSyncCode(chunk, p)) continue
+            val next = headerBlockSize(chunk, p)
+            if (next < 0) continue
+            frames += Frame(chunk.copyOfRange(start, p), timestampUs + samples * 1_000_000L / sampleRate)
+            samples += blockSize
+            start = p
+            crc = 0
+            blockSize = next
         }
         if (frames.isEmpty()) return listOf(Frame(chunk, timestampUs))
         frames += Frame(chunk.copyOfRange(start, chunk.size), timestampUs + samples * 1_000_000L / sampleRate)
@@ -51,12 +52,6 @@ object FlacFrames {
 
     private fun isSyncCode(b: ByteArray, p: Int): Boolean =
         b[p].toInt() and 0xFF == 0xFF && (b[p + 1].toInt() and 0xFE) == 0xF8
-
-    /** Whether the bytes [start, end) end with the CRC-16 of those before it. */
-    private fun closesFrame(b: ByteArray, start: Int, end: Int): Boolean {
-        val footer = ((b[end - 2].toInt() and 0xFF) shl 8) or (b[end - 1].toInt() and 0xFF)
-        return crc16(b, start, end - 2) == footer
-    }
 
     /** The block size of a valid frame header at [p], in samples, or -1. */
     internal fun headerBlockSize(b: ByteArray, p: Int): Int {
@@ -114,10 +109,16 @@ object FlacFrames {
     // CRC-16, polynomial x^16 + x^15 + x^2 + 1, initial value 0
     internal fun crc16(b: ByteArray, from: Int, to: Int): Int {
         var crc = 0
-        for (i in from until to) {
-            crc = crc xor ((b[i].toInt() and 0xFF) shl 8)
-            repeat(8) { crc = if (crc and 0x8000 != 0) ((crc shl 1) xor 0x8005) and 0xFFFF else (crc shl 1) and 0xFFFF }
-        }
+        for (i in from until to) crc = crc16Step(crc, b[i])
         return crc
+    }
+
+    private fun crc16Step(crc: Int, byte: Byte): Int =
+        ((crc shl 8) and 0xFFFF) xor CRC16_TABLE[((crc shr 8) xor (byte.toInt() and 0xFF)) and 0xFF]
+
+    private val CRC16_TABLE = IntArray(256) { i ->
+        var crc = i shl 8
+        repeat(8) { crc = if (crc and 0x8000 != 0) ((crc shl 1) xor 0x8005) and 0xFFFF else (crc shl 1) and 0xFFFF }
+        crc
     }
 }

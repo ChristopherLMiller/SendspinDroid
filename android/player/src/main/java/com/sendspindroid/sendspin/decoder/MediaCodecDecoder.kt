@@ -243,8 +243,14 @@ abstract class MediaCodecDecoder(
     }
 
     override fun release() {
+        // stop() throws for a codec in its error state, after a fatal decode
+        // error: release() is valid in any state and must still run
         try {
             mediaCodec?.stop()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error stopping decoder", e)
+        }
+        try {
             mediaCodec?.release()
         } catch (e: Exception) {
             Log.e(TAG, "Error releasing decoder", e)
