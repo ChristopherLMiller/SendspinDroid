@@ -6,6 +6,10 @@ import android.net.LinkAddress
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.sendspindroid.model.ConnectionType
 import com.sendspindroid.model.UnifiedServer
@@ -42,14 +46,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 sealed class NetworkEvent {
     /**
-     * The default network's identity changed (different [networkHandle]).
+     * The followed network (the best one with internet that is not a VPN) is
+     * gone and another has taken its place (different [networkHandle]).
      * Indicates a transport handover (e.g., WiFi -> Cellular). The reconnect
      * loop should re-attempt the local connection on the new network.
      */
     data class IdentityChanged(val networkHandle: Long) : NetworkEvent()
 
     /**
-     * An address was added to or removed from the default network without an
+     * An address was added to or removed from the followed network without an
      * identity change: a DHCP renewal, or an IPv6 temporary address rotating.
      * A connection open on another address carries on; what depends on the
      * address set (multicast lock, NSD advertisement) is refreshed.
@@ -119,8 +124,10 @@ class ConnectionCoordinator(
     @Volatile private var skipDelay: CompletableDeferred<Unit>? = null
     @Volatile private var lastRetryNowNanos: Long = 0L
 
-    // Network callback state -- all written exclusively from binder/callback threads.
-    @Volatile private var lastNetworkHandle: Long = -1L
+    // Network callback state -- written only on the main thread, where the
+    // callback runs (see init) and close() is called.
+    // The network whose identity and addresses are followed: never a VPN.
+    @Volatile private var lastNetwork: Network? = null
     @Volatile private var lastLinkAddresses: Set<Pair<java.net.InetAddress, Int>>? = null
     @Volatile private var lastValidatedState: Boolean? = null
     private var validationLossJob: Job? = null
@@ -137,24 +144,15 @@ class ConnectionCoordinator(
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            val handle = network.networkHandle
-            Log.d(TAG, "Network available: handle=$handle (last=$lastNetworkHandle)")
+            Log.d(TAG, "Network available: handle=${network.networkHandle} (last=${lastNetwork?.networkHandle})")
 
             networkEvaluator?.evaluateCurrentNetwork(network)
             networkEvaluator?.networkState?.value?.let { _networkState.value = it }
 
             // A network is back: no point waiting out the rest of a backoff.
             retryNow()
-
-            // Detect network identity change (not the very first callback).
-            if (lastNetworkHandle != -1L && lastNetworkHandle != handle) {
-                Log.i(TAG, "Network identity changed: $lastNetworkHandle -> $handle")
-                // Clear link-address baseline so the next onLinkPropertiesChanged on the
-                // new network starts fresh rather than comparing against old addresses.
-                lastLinkAddresses = null
-                scope.launch { _networkEvents.emit(NetworkEvent.IdentityChanged(handle)) }
-            }
-            lastNetworkHandle = handle
+            // Whether it is a new network identity is decided in
+            // onCapabilitiesChanged, which always follows straight after.
         }
 
         override fun onLost(network: Network) {
@@ -204,11 +202,39 @@ class ConnectionCoordinator(
                 // Re-emit the current (connected) evaluator state.
                 networkEvaluator?.networkState?.value?.let { _networkState.value = it }
             }
+
+            // A VPN is never the identity: a LAN connection stays on the
+            // network under it, and carries on as the VPN comes and goes.
+            if (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) follow(network)
+        }
+
+        /**
+         * Follow [network] from now on. The first one is the baseline. A
+         * different one is a handover only if the previous one is gone: Wi-Fi
+         * that lost validation gives way to cellular but stays connected, and
+         * a connection open on it carries on.
+         */
+        private fun follow(network: Network) {
+            val prev = lastNetwork
+            lastNetwork = network
+            if (prev == null || prev.networkHandle == network.networkHandle) return
+
+            // The next onLinkPropertiesChanged takes the new network's baseline.
+            lastLinkAddresses = null
+            // May be a step behind the callbacks. A stale answer that the old
+            // network is still up only leaves the reconnect to the failure of
+            // the socket on it, which resets the clock as well.
+            if (connectivityManager?.getNetworkCapabilities(prev) != null) {
+                Log.i(TAG, "Following network ${network.networkHandle}; ${prev.networkHandle} is still up")
+                return
+            }
+            Log.i(TAG, "Network identity changed: ${prev.networkHandle} -> ${network.networkHandle}")
+            scope.launch { _networkEvents.emit(NetworkEvent.IdentityChanged(network.networkHandle)) }
         }
 
         override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-            // Only care about changes on the currently-active network.
-            if (network.networkHandle != lastNetworkHandle) return
+            // Only care about changes on the followed network.
+            if (network.networkHandle != lastNetwork?.networkHandle) return
 
             // Address and prefix only: LinkAddress equality also compares flags
             // and lifetimes, which change on every router advertisement.
@@ -230,11 +256,27 @@ class ConnectionCoordinator(
     init {
         val cm = connectivityManager
         if (cm != null) {
-            // The default network only: a callback for every network with
+            // One network at a time: a callback for every network with
             // internet would see a cellular network kept up in the background
             // while on Wi-Fi, and treat its comings and goings as a handover.
+            // On the main thread, like close() and the event collectors, so the
+            // callback state is only ever touched from one thread.
+            val handler = Handler(Looper.getMainLooper())
             try {
-                cm.registerDefaultNetworkCallback(networkCallback)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    // The best network with internet that is not a VPN (the
+                    // builder's default NOT_VPN): under a VPN, Wi-Fi's drops,
+                    // rejoins and address changes are still seen.
+                    val request = NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build()
+                    cm.registerBestMatchingNetworkCallback(request, networkCallback, handler)
+                } else {
+                    // The app's default network. Under a VPN that is the VPN,
+                    // which these versions then see alone: nothing of the
+                    // network under it reaches the callback.
+                    cm.registerDefaultNetworkCallback(networkCallback, handler)
+                }
                 Log.d(TAG, "Network callback registered")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to register network callback", e)
