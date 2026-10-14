@@ -137,10 +137,12 @@ class SyncAudioPlayerLoopTest {
     private var wrapPositions = false
 
     /**
-     * Advance the clock 10 ms and run one loop iteration. [timestampShiftNs]
-     * moves this tick's timestamp time, to model one bad reading.
+     * Advance the clock 10 ms and run one loop iteration, or with [burst]
+     * every iteration until the loop waits, as the audio thread does: those
+     * all read the same timestamp. [timestampShiftNs] moves this tick's
+     * timestamp time, to model one bad reading.
      */
-    private fun tick(timestamps: Boolean = true, timestampShiftNs: Long = 0L) {
+    private fun tick(timestamps: Boolean = true, timestampShiftNs: Long = 0L, burst: Boolean = false) {
         now.addAndGet(tickNs)
         if (sink.flushCallCount.get() != flushesSeen) {
             flushesSeen = sink.flushCallCount.get()
@@ -160,7 +162,11 @@ class SyncAudioPlayerLoopTest {
         val position = if (timestamp != null) dacPosition else head
         dacTimeOfNextWriteUs = nowUs + (framesInTrack() - position) * 1_000_000L / sampleRate
         writesBeforeTick = sink.writes.size
-        step()
+        if (!burst) {
+            step()
+            return
+        }
+        repeat(20) { if (stepMethod.invoke(player) as Long > 0L) return }
     }
 
     private fun tickUntilPlaying(timestamps: Boolean = true, maxTicks: Int = 300) {
@@ -582,11 +588,6 @@ class SyncAudioPlayerLoopTest {
     // Recovery: large errors, a dry output, gaps, wrapping positions
     // ========================================================================
 
-    /** Past the reanchor cooldown, which counts from a clock reading of 0. */
-    private fun pastReanchorCooldown() {
-        now.addAndGet(6_000_000_000L)
-    }
-
     /** Tick until the player realigns, which takes two readings of the error. */
     private fun tickUntilRealigning(maxTicks: Int = 20) {
         repeat(maxTicks) {
@@ -605,10 +606,10 @@ class SyncAudioPlayerLoopTest {
 
     @Test
     fun `a large early step realigns the queue instead of discarding it`() {
-        pastReanchorCooldown()
         val firstServerTimeUs = nowUs + 400_000L
         steadyPlay(firstServerTimeUs, count = 300)
         val dropped = player.getStats().chunksDropped
+        val flushes = sink.flushCallCount.get()
 
         // Everything is now due 800 ms later
         timeFilter.setUserSyncOffsetMs(800.0)
@@ -621,6 +622,7 @@ class SyncAudioPlayerLoopTest {
 
         assertEquals(1L, player.getStats().reanchorCount)
         assertEquals("nothing queued was dropped", dropped, player.getStats().chunksDropped)
+        assertEquals("what the track holds plays out", flushes, sink.flushCallCount.get())
         assertEquals("playback goes on from the queue head", lastTag + 1, audioTagsWrittenSince(writesAtStep).first())
         val errorUs = startErrorUs(firstServerTimeUs) - 800_000L
         assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
@@ -628,10 +630,10 @@ class SyncAudioPlayerLoopTest {
 
     @Test
     fun `a large late step drops only the audio that went late`() {
-        pastReanchorCooldown()
         val firstServerTimeUs = nowUs + 400_000L
         steadyPlay(firstServerTimeUs, count = 300)
         val dropped = player.getStats().chunksDropped
+        val flushes = sink.flushCallCount.get()
 
         // Everything is now due 800 ms earlier
         timeFilter.setUserSyncOffsetMs(-800.0)
@@ -639,6 +641,7 @@ class SyncAudioPlayerLoopTest {
         tickUntilPlaying(maxTicks = 20)
 
         assertEquals(1L, player.getStats().reanchorCount)
+        assertEquals("the track's late audio is flushed", flushes + 1, sink.flushCallCount.get())
         // About 800 ms, give or take what the flush and the restart take
         val droppedNow = player.getStats().chunksDropped - dropped
         assertTrue("$droppedNow chunks dropped for 800 ms", droppedNow in 30L..50L)
@@ -648,14 +651,17 @@ class SyncAudioPlayerLoopTest {
     }
 
     @Test
-    fun `one wild timestamp does not realign`() {
-        pastReanchorCooldown()
+    fun `one wild timestamp does not realign even when several chunks read it`() {
         steadyPlay(nowUs + 400_000L, count = 300)
         val dropped = player.getStats().chunksDropped
 
-        // One tick that writes a chunk measures it against a timestamp 600 ms off
-        val writes = sink.writes.size
-        repeat(3) { if (sink.writes.size == writes) tick(timestampShiftNs = 600_000_000L) }
+        // The track plays 60 ms more than usual, so the next iterations write
+        // several chunks back to back, all measured against one timestamp
+        // that is 600 ms off.
+        head = minOf(framesInTrack(), head + 2_880L)
+        val written = player.getStats().chunksPlayed
+        tick(timestampShiftNs = 600_000_000L, burst = true)
+        assertTrue("several chunks read the bad timestamp", player.getStats().chunksPlayed - written >= 2)
         assertTrue("the bad reading was taken", player.getSyncErrorUs() > 500_000L)
         repeat(50) { tick() }
 
@@ -665,8 +671,49 @@ class SyncAudioPlayerLoopTest {
     }
 
     @Test
+    fun `a second large step soon after a realignment that worked is corrected at once`() {
+        val firstServerTimeUs = nowUs + 400_000L
+        steadyPlay(firstServerTimeUs, count = 400)
+        val stepAtUs = nowUs
+
+        timeFilter.setUserSyncOffsetMs(800.0)
+        tickUntilRealigning()
+        tickUntilPlaying(maxTicks = 200)
+        repeat(20) { tick() }
+
+        // Well inside the 5 s cooldown
+        timeFilter.setUserSyncOffsetMs(0.0)
+        tickUntilRealigning()
+        tickUntilPlaying(maxTicks = 20)
+
+        assertTrue("both within ${(nowUs - stepAtUs) / 1000} ms", nowUs - stepAtUs < 5_000_000L)
+        assertEquals(2L, player.getStats().reanchorCount)
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `resume after a pause realigns the queue through start gating`() {
+        val firstServerTimeUs = nowUs + 400_000L
+        queueNumberedStream(firstServerTimeUs, count = 400)
+        tickUntilPlaying()
+        repeat(20) { tick() }
+        val dropped = player.getStats().chunksDropped
+
+        player.pause()
+        now.addAndGet(1_000_000_000L)  // 1 s: the queue head is now about 750 ms late
+        player.resume()
+        assertEquals(PlaybackState.REANCHORING, player.getPlaybackState())
+
+        tickUntilPlaying(maxTicks = 20)
+
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+        assertTrue("audio that went late during the pause is dropped", player.getStats().chunksDropped > dropped)
+    }
+
+    @Test
     fun `no sync measurement while the time filter is not ready`() {
-        pastReanchorCooldown()
         // Server time runs 10 s ahead of local time
         timeFilter.reset()
         timeFilter.addMeasurement(10_000_000L, 1_000L, 3L)
@@ -733,6 +780,43 @@ class SyncAudioPlayerLoopTest {
         val errorUs = startErrorUs(firstServerTimeUs)
         assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
         assertEquals(1L, player.getStats().bufferUnderrunCount)
+    }
+
+    @Test
+    fun `audio arriving just in time after the output ran dry is not dropped`() {
+        queueStream(nowUs + 400_000L, count = 50, tag = 99)
+        tickUntilPlaying()
+        repeat(150) { tick() }
+        assertEquals(PlaybackState.INITIALIZING, player.getPlaybackState())
+        val dropped = player.getStats().chunksDropped
+
+        // Due in 120 ms: on time behind a small cushion of silence, late
+        // behind the usual 200 ms of keepalive.
+        val firstServerTimeUs = nowUs + 120_000L
+        queueNumberedStream(firstServerTimeUs, count = 50)
+        tickUntilPlaying(maxTicks = 20)
+
+        assertEquals("nothing on time is dropped", dropped, player.getStats().chunksDropped)
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `a gap never evicts queued audio from a capped queue`() {
+        val p = newPlayer(FakeAudioSink(), maxQueueSamples = chunkFrames * 10L)
+        val t = nowUs + 500_000L
+        repeat(9) { p.queueChunk(t + it * chunkUs, pcm(it + 1)) }
+
+        // 100 ms later than the end of what is queued
+        p.queueChunk(t + 9 * chunkUs + 100_000L, pcm(10))
+
+        assertEquals("all ten chunks are still queued", 10L * chunkFrames, samplesInQueue(p))
+        assertEquals("the audio due next is still the head", 1, tagOf(
+            field<java.util.Queue<Any>>(p, "chunkQueue").first().let {
+                Class.forName("com.sendspindroid.sendspin.SyncAudioPlayer\$AudioChunk")
+                    .getDeclaredMethod("getPcmData").apply { isAccessible = true }.invoke(it) as ByteArray
+            }
+        ))
     }
 
     @Test

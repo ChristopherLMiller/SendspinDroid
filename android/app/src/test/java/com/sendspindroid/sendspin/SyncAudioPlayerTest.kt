@@ -107,23 +107,36 @@ class SyncAudioPlayerTest {
     }
 
     // ========================================================================
-    // Test 3: Reanchor respects 5-second cooldown
+    // Test 3: A reanchor that has not settled holds the next back for 5 s
     // ========================================================================
 
     @Test
-    fun `triggerReanchor respects 5-second cooldown`() {
+    fun `triggerReanchor respects the cooldown while the last reanchor has not settled`() {
         val method = SyncAudioPlayer::class.java.getDeclaredMethod("triggerReanchor")
         method.isAccessible = true
 
         setField("playbackState", PlaybackState.PLAYING)
 
-        // Set lastReanchorTimeUs to "now" to simulate recent reanchor
+        // A reanchor just now, and no reading back in range since
         val nowUs = System.nanoTime() / 1000
         setField("lastReanchorTimeUs", nowUs)
+        setField("reanchorSettled", false)
 
         val result = method.invoke(player) as Boolean
         assertFalse("Reanchor should be rejected within cooldown", result)
         assertEquals(PlaybackState.PLAYING, player.getPlaybackState())
+    }
+
+    @Test
+    fun `triggerReanchor succeeds within the cooldown once the last reanchor settled`() {
+        val method = SyncAudioPlayer::class.java.getDeclaredMethod("triggerReanchor")
+        method.isAccessible = true
+
+        setField("playbackState", PlaybackState.PLAYING)
+        setField("lastReanchorTimeUs", System.nanoTime() / 1000)
+        setField("reanchorSettled", true)
+
+        assertTrue(method.invoke(player) as Boolean)
     }
 
     @Test
@@ -136,6 +149,7 @@ class SyncAudioPlayerTest {
         // Set lastReanchorTimeUs to well in the past (>5 seconds ago)
         val nowUs = System.nanoTime() / 1000
         setField("lastReanchorTimeUs", nowUs - 6_000_000L)
+        setField("reanchorSettled", false)
 
         val result = method.invoke(player) as Boolean
         assertTrue("Reanchor should succeed after cooldown", result)
