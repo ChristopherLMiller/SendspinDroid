@@ -48,6 +48,15 @@ class MinBufferEstimatorTest {
     }
 
     @Test
+    fun `a delay that comes back larger is reported at the size both reached`() {
+        play(10_000, 70_000, delayMs = 12)
+        chunk(70_000, delayMs = 220)
+        play(70_020, 80_000, delayMs = 12)
+        assertTrue(chunk(80_000, delayMs = 300))
+        assertEquals(550, estimator.minBufferMs)
+    }
+
+    @Test
     fun `a clock error that makes the delay negative counts as none`() {
         play(10_000, 11_000, delayMs = 12)
         assertFalse(chunk(11_000, delayMs = -4))

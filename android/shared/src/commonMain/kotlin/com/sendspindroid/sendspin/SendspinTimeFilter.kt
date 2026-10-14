@@ -131,11 +131,14 @@ class SendspinTimeFilter {
         snapshot = Snapshot(offset, drift, useDrift, lastUpdateTime, offsetCovariance, measurementCount)
     }
 
-    // Static delay: the sync offset set by the user's slider or pushed by the
-    // server. Output latency up to the DAC is not part of it - the player
-    // schedules against AudioTrack timestamps, which already include it.
-    // @Volatile: read by the audio thread (serverToClient), written from
-    // UI/main threads.
+    // Static delay: the sync offset, a server's if it pushed one and the
+    // user's otherwise (syncOffsetMicros). Output latency up to the DAC is
+    // not part of it - the player schedules against AudioTrack timestamps,
+    // which already include it. @Volatile: both fields are read by the audio
+    // thread (serverToClient) and written from others.
+
+    // The user's offset: the settings slider's value, set when the user moves
+    // it and restored when a connection is ready, both on the main thread.
     @Volatile private var userSyncOffsetMicros: Long = 0
 
     // A server's push (client/sync_offset) stands in for the user's value
@@ -242,8 +245,9 @@ class SendspinTimeFilter {
     }
 
     /**
-     * Write the user's manual sync-offset correction (milliseconds).
-     * Called by the settings slider's broadcast path.
+     * Write the user's manual sync-offset correction (milliseconds). Called
+     * when the user changes it in the settings, and to restore the saved
+     * setting when a connection is ready.
      *
      * @param overrideServer false when this restores the saved setting
      *   rather than the user changing it: a server's offset then stays in

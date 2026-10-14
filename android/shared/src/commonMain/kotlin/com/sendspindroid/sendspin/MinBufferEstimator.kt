@@ -94,11 +94,21 @@ class MinBufferEstimator(
         // Raise once a delay has come back in another slot (the second-largest
         // slot); keep it while any slot in the window still holds it, so it
         // lasts a full window after the latest occurrence. Rounding down is
-        // covered by the margin in the floor.
-        val sorted = worstDelayMs.sortedDescending()
+        // covered by the margin in the floor. One pass rather than a sort, as
+        // this runs for every chunk on the receive thread.
+        var largest = 0
+        var secondLargest = 0
+        for (d in worstDelayMs) {
+            if (d > largest) {
+                secondLargest = largest
+                largest = d
+            } else if (d > secondLargest) {
+                secondLargest = d
+            }
+        }
         val reportedDelayMs = minBufferMs - floorMs
-        val heldDelayMs = if (sorted[0] / STEP_MS * STEP_MS >= reportedDelayMs) reportedDelayMs else 0
-        val target = floorMs + maxOf(sorted[1] / STEP_MS * STEP_MS, heldDelayMs)
+        val heldDelayMs = if (largest / STEP_MS * STEP_MS >= reportedDelayMs) reportedDelayMs else 0
+        val target = floorMs + maxOf(secondLargest / STEP_MS * STEP_MS, heldDelayMs)
         if (target == minBufferMs || nowMs - lastChangeMs < MIN_CHANGE_INTERVAL_MS) return false
         minBufferMs = target
         lastChangeMs = nowMs

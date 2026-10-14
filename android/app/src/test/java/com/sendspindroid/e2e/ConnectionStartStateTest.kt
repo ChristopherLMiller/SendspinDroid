@@ -2,6 +2,7 @@ package com.sendspindroid.e2e
 
 import com.sendspindroid.UserSettings
 import com.sendspindroid.sendspin.protocol.PlaintextCrypto
+import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import io.mockk.every
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -98,5 +99,20 @@ class ConnectionStartStateTest : E2ETestBase() {
 
         client.setUserSyncOffsetMs(0.0)
         assertEquals(0.0, client.getTimeFilter().staticDelayMs, 0.0)
+    }
+
+    @Test
+    fun `the user's offset change is reported in the timing parameters at once`() {
+        connectAndHandshake()
+        // The activation's client/state is built when it is sent: let it go
+        // first, so it cannot be the one that carries the new offset.
+        assertTrue(fakeServer.clientSentState())
+        fakeTransport.clearRecordedMessages()
+
+        client.setUserSyncOffsetMs(-120.0)
+
+        assertTrue(fakeTransport.hasSentMessageContaining(
+            "\"required_lead_time_ms\":${SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_MS + 120},"
+        ))
     }
 }
