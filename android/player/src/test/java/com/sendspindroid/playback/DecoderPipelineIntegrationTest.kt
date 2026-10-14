@@ -3,9 +3,11 @@ package com.sendspindroid.playback
 import android.util.Log
 import com.sendspindroid.playback.FakeAudioDecoder.Companion.makeChunk
 import com.sendspindroid.playback.FakeAudioDecoder.Companion.readLongBE
-import com.sendspindroid.sendspin.decoder.AudioDecoder
+import com.sendspindroid.sendspin.SendSpin
+import com.sendspindroid.sendspin.SyncAudioPlayer
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import io.mockk.every
+import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
@@ -16,9 +18,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.util.concurrent.ConcurrentLinkedQueue
+import kotlinx.coroutines.test.StandardTestDispatcher
 
 /**
- * Integration tests for PlaybackService's decoder pipeline: onStreamStart ->
+ * Integration tests for [SendSpinEngine]'s decoder pipeline: onStreamStart ->
  * onAudioChunk* -> {onStreamClear | onStreamEnd}. These tests assert two
  * behavior-level invariants the pipeline MUST preserve through any refactor:
  *
@@ -29,22 +32,13 @@ import java.util.concurrent.ConcurrentLinkedQueue
  *  (B) Output completeness -- every chunk the pipeline accepts eventually
  *      yields a PCM output delivered to [SyncAudioPlayer.queueChunk].
  *
- * These invariants are stable across the codec-safe decoder redesign (Tasks
- * 3-4 move the decoder onto a dedicated coroutine with a bounded channel).
  * They also capture the exact failure mode of PR #142 (drop-oldest on channel
  * full), which would flunk test 1 with a non-contiguous-input throw.
  *
- * PlaybackService itself is an Android Service that cannot be instantiated in
- * a JVM unit test. Following the pattern in [StreamStartDecoderPipelineTest]
- * and [DecoderSetupTest], we reproduce the relevant callback bodies in a
- * small [DecoderPipelineSimulator] that mirrors PlaybackService's decoder
- * pipeline and [SyncAudioPlayer.queueChunk] seam. The FakeAudioDecoder is
- * injected via `mockkObject(AudioDecoderFactory)` so `create()` returns it,
- * matching the production code path exercised by onStreamStart.
- *
- * When the channel-based refactor lands in Task 4, the simulator's internal
- * wiring will be updated to mirror the new flow. The assertions in this file
- * should not change.
+ * The real engine runs here, its main and decode dispatchers on one test
+ * scheduler. The player is a mock that records queueChunk, and the
+ * FakeAudioDecoder is injected via `mockkObject(AudioDecoderFactory)` so
+ * `create()` returns it.
  */
 class DecoderPipelineIntegrationTest {
 
@@ -105,9 +99,7 @@ class DecoderPipelineIntegrationTest {
             )
         }
 
-        // Drain any asynchronous processing. The current (pre-refactor) code is
-        // synchronous so this is a no-op; after Task 4 it will block until the
-        // decode channel is empty.
+        // Run the main and decode dispatchers until the channel is empty.
         simulator.waitForIdle()
 
         assertFalse(
@@ -143,12 +135,10 @@ class DecoderPipelineIntegrationTest {
 
     // =========================================================================
     // Test 2: onStreamStart -> chunks -> onStreamEnd does NOT release the
-    // decoder. The real PlaybackService.onStreamEnd (PlaybackService.kt line
-    // 1394) only enters idle mode on the SyncAudioPlayer; decoder release
-    // happens later, either on the next onStreamStart (which releases the
-    // prior decoder before creating a new one) or on onDestroy. This test
-    // locks that behavior so the simulator cannot silently diverge from the
-    // production decoder lifecycle.
+    // decoder. SendSpinEngine.onStreamEnd only enters idle mode on the
+    // SyncAudioPlayer; decoder release happens later, either on the next
+    // onStreamStart (which releases the prior decoder before creating a new
+    // one) or on release().
     // =========================================================================
 
     @Test
@@ -182,7 +172,7 @@ class DecoderPipelineIntegrationTest {
             fakeDecoder.decodeCalls.get()
         )
         assertEquals(
-            "onStreamEnd must NOT release the decoder (see PlaybackService.kt line 1394)",
+            "onStreamEnd must NOT release the decoder (see SendSpinEngine.onStreamEnd)",
             0,
             fakeDecoder.releaseCalls.get()
         )
@@ -262,8 +252,9 @@ class DecoderPipelineIntegrationTest {
     // cleanly. This is the real lifecycle that PR #142 was worried about and
     // is what actually exercises the decoder-recreate path (onStreamEnd does
     // NOT release -- see test 2 -- so the only point where the previous
-    // decoder is torn down is the next onStreamStart, per PlaybackService.kt
-    // around line 1313).
+    // decoder is torn down is the next onStreamStart). The stream ends
+    // between the two: a stream/start that repeats the active stream's
+    // format is a no-op (see StreamStartAction).
     //
     // Note on AudioDecoderFactory mockk behavior: setUp() uses
     //   every { AudioDecoderFactory.create(any<String>()) } returns fakeDecoder
@@ -294,10 +285,11 @@ class DecoderPipelineIntegrationTest {
         }
         simulator.waitForIdle()
 
-        // Second stream start. The simulator mirrors PlaybackService here:
-        // release the prior decoder, then create+configure a new one. Because
-        // the mockk factory returns the same fake instance, configure() on
-        // that fake resets expectedNextSeq to 0 so sequences restart from 0.
+        // Second stream start: release the prior decoder, then
+        // create+configure a new one. Because the mockk factory returns the
+        // same fake instance, configure() on that fake resets expectedNextSeq
+        // to 0 so sequences restart from 0.
+        simulator.onStreamEnd()
         simulator.onStreamStart(
             codec = "flac",
             sampleRate = 48000,
@@ -348,14 +340,9 @@ class DecoderPipelineIntegrationTest {
     }
 
     // =========================================================================
-    // Test 5: stress test -- a burst larger than the production channel
-    // capacity (1000 slots) preserves contiguity and delivers every chunk.
-    //
-    // In production this would exercise the channel-capacity boundary and
-    // trigger producer-side suspend on the last ~200 sends. In the
-    // synchronous simulator there is no channel, so this is a stronger
-    // version of test 1: the logical invariant is zero loss + zero
-    // corruption at any burst size, regardless of queueing strategy.
+    // Test 5: stress test -- a burst larger than the channel capacity (1000
+    // slots) preserves contiguity and delivers every chunk. The last ~200
+    // sends suspend until the worker makes room.
     // =========================================================================
 
     @Test
@@ -368,9 +355,7 @@ class DecoderPipelineIntegrationTest {
             codecHeader = ByteArray(42)
         )
 
-        // Submit 1200 chunks. In production this would exercise the channel
-        // capacity boundary (1000 slots) and trigger producer-side suspend
-        // on the last ~200 sends. In the simulator it's just a big sequence.
+        // Submit 1200 chunks, past the channel's 1000 slots.
         val chunkCount = 1200
         for (i in 0 until chunkCount) {
             simulator.onAudioChunk(
@@ -407,12 +392,9 @@ class DecoderPipelineIntegrationTest {
     }
 
     // =========================================================================
-    // Test 6: onDestroy releases the decoder exactly once, after pending
-    // chunks have been processed. Documents the teardown contract added in
-    // Task 4 (real PlaybackService sends a final Release through the channel
-    // and closes it). In the synchronous simulator onDestroy just releases
-    // the captured decoder reference, which is the corresponding behavioral
-    // assertion.
+    // Test 6: release() releases the decoder exactly once, after pending
+    // chunks have been processed. It sends a final Release through the
+    // channel and closes it.
     // =========================================================================
 
     @Test
@@ -446,8 +428,7 @@ class DecoderPipelineIntegrationTest {
             fakeDecoder.releaseCalls.get()
         )
 
-        // Teardown: simulator's onDestroy mirrors the real PlaybackService
-        // path -- sending a Release and letting the worker process it.
+        // Teardown: a final Release, and the worker left to process it.
         simulator.onDestroy()
 
         assertEquals(
@@ -468,32 +449,34 @@ class DecoderPipelineIntegrationTest {
     private data class QueuedChunk(val serverTimeMicros: Long, val pcm: ByteArray)
 
     /**
-     * Mirrors the decoder-pipeline portion of PlaybackService's
-     * SendSpin.Callback: onStreamStart / onAudioChunk / onStreamClear /
-     * onStreamEnd. Captures queueChunk calls in [queuedChunks].
-     *
-     * This simulator models the CURRENT (pre-refactor) synchronous flow where:
-     *   - onStreamStart releases any prior decoder, then creates+configures
-     *     a fresh one
-     *   - onAudioChunk decodes on the calling thread and forwards PCM to
-     *     "queueChunk" (captured here as list insertion)
-     *   - onStreamClear flushes the decoder
-     *   - onStreamEnd does NOT touch the decoder (mirroring
-     *     PlaybackService.kt line 1394); release only happens on the next
-     *     onStreamStart or on shutdown
-     *
-     * After the Task 4 refactor the decoder work moves onto a dedicated
-     * coroutine with a bounded channel. The simulator body will be updated
-     * then, but the asserted invariants (contiguity + completeness) hold
-     * across both designs.
+     * A [SendSpinEngine] on a test scheduler, with a mock player whose
+     * queueChunk calls are captured in [queuedChunks].
      */
     private inner class DecoderPipelineSimulator {
         val queuedChunks: ConcurrentLinkedQueue<QueuedChunk> = ConcurrentLinkedQueue()
 
-        private var audioDecoder: AudioDecoder? = null
-        @Volatile
-        private var decoderReady: Boolean = false
-        private var currentCodec: String = ""
+        private val dispatcher = StandardTestDispatcher()
+
+        private val player = mockk<SyncAudioPlayer>(relaxed = true).also { p ->
+            every { p.bytesPerFrame } returns 4
+            every { p.hasRoomFor(any()) } returns true
+            every { p.queueChunk(any(), any(), any()) } answers {
+                queuedChunks.add(QueuedChunk(firstArg(), secondArg()))
+            }
+        }
+
+        private val engine = SendSpinEngine(
+            listener = object : SendSpinEngine.Listener {
+                override fun onStreamStarted() {}
+                override fun onPlayerChanged(player: SyncAudioPlayer?) {}
+                override fun onPlayerStateChanged(state: com.sendspindroid.sendspin.PlaybackState) {}
+            },
+            lowMemoryMode = { false },
+            playerMuted = { false },
+            mainDispatcher = dispatcher,
+            decodeDispatcher = dispatcher,
+            newPlayer = { _, _, _, _, _ -> player },
+        ).also { it.client = mockk<SendSpin>(relaxed = true) }
 
         fun onStreamStart(
             codec: String,
@@ -501,84 +484,25 @@ class DecoderPipelineIntegrationTest {
             channels: Int,
             bitDepth: Int,
             codecHeader: ByteArray?
-        ) {
-            // Mirrors PlaybackService.onStreamStart decoder-setup portion.
-            decoderReady = false
-            currentCodec = codec
-            audioDecoder?.release()
-            audioDecoder = null
-            try {
-                audioDecoder = AudioDecoderFactory.create(codec)
-                audioDecoder?.configure(sampleRate, channels, bitDepth, codecHeader)
-                decoderReady = true
-            } catch (e: Exception) {
-                audioDecoder = null
-            }
-        }
+        ) = engine.onStreamStart(codec, sampleRate, channels, bitDepth, codecHeader)
 
-        fun onAudioChunk(serverTimeMicros: Long, audioData: ByteArray) {
-            // Mirrors PlaybackService.onAudioChunk: drop-gate on !decoderReady,
-            // capture local decoder ref, decode, forward PCM to the player.
-            if (!decoderReady) return
-            val decoder = audioDecoder
-            val pcmData: ByteArray? = try {
-                when {
-                    decoder != null -> decoder.decode(audioData, serverTimeMicros).firstOrNull()?.pcm
-                    currentCodec == "pcm" -> audioData
-                    else -> null
-                }
-            } catch (e: Exception) {
-                null
-            }
-            if (pcmData != null) {
-                queuedChunks.add(QueuedChunk(serverTimeMicros, pcmData))
-            }
-        }
+        fun onAudioChunk(serverTimeMicros: Long, audioData: ByteArray) =
+            engine.onAudioChunk(serverTimeMicros, audioData)
 
-        fun onStreamClear() {
-            // Mirrors PlaybackService.onStreamClear decoder-flush portion.
-            audioDecoder?.flush()
-        }
+        fun onStreamClear() = engine.onStreamClear()
 
-        fun onStreamEnd() {
-            // Mirrors PlaybackService.onStreamEnd (PlaybackService.kt line
-            // 1394): it enters idle mode on the SyncAudioPlayer and does NOT
-            // touch the decoder. Decoder release happens on the next
-            // onStreamStart (which releases the prior decoder before creating
-            // a new one) or on onDestroy. The simulator has no SyncAudioPlayer
-            // to idle, so this handler is intentionally empty.
-        }
+        fun onStreamEnd() = engine.onStreamEnd()
 
-        /**
-         * Mirrors the decoder-release portion of PlaybackService.onDestroy.
-         * In the real service this is done via decodeChannel.send(Release)
-         * followed by channel.close() and a bounded join on the decode
-         * worker -- handleDecodeRelease is what actually calls
-         * audioDecoder?.release(). The simulator is synchronous and has no
-         * worker, so it releases the captured decoder directly. We also
-         * clear decoderReady so any post-destroy onAudioChunk calls would
-         * be gated off, matching production's behavior once the channel
-         * is closed.
-         */
         fun onDestroy() {
-            decoderReady = false
-            audioDecoder?.release()
-            audioDecoder = null
+            engine.release()
+            dispatcher.scheduler.advanceUntilIdle()
         }
 
-        /**
-         * Wait until all submitted work has been processed. The current
-         * simulator is synchronous; this is a no-op. After Task 4 this should
-         * block until the decode channel is empty and the decode coroutine is
-         * idle.
-         */
+        /** Run every task the engine has queued, decoding included. */
         fun waitForIdle() {
-            // Synchronous pipeline: nothing to drain.
+            dispatcher.scheduler.advanceUntilIdle()
         }
 
-        fun shutdown() {
-            audioDecoder?.release()
-            audioDecoder = null
-        }
+        fun shutdown() {}
     }
 }
