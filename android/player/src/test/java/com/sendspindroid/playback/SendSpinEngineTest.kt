@@ -247,6 +247,17 @@ class SendSpinEngineTest {
     }
 
     @Test
+    fun `the track gain reaches the output still playing out`() {
+        startStream()
+        changeFormat()
+
+        engine.setTrackGain(0.25f)
+
+        verify { players[0].setVolume(0.25f) }
+        verify { players[1].setVolume(0.25f) }
+    }
+
+    @Test
     fun `audio the old decoder still holds goes to the old output`() {
         every { AudioDecoderFactory.create(any<String>()) } returns decoderHolding(5_000L, 16)
         startStream()
