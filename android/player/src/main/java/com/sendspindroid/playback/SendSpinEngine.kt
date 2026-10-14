@@ -11,6 +11,7 @@ import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import com.sendspindroid.sendspin.protocol.StreamConfig
 import com.sendspindroid.sendspin.SendspinTimeFilter
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -100,6 +101,11 @@ class SendSpinEngine(
     // SYNC belongs to the player whose sync it reports.
     private val heldMutes = mutableSetOf<SyncAudioPlayer.MuteReason>()
 
+    // Players replaced by a format change on an active stream, still playing
+    // out the audio received in the old format (see switchOutputFormat).
+    // Everything done to the output is done to them too. Main thread only.
+    private val retiredPlayers = mutableListOf<SyncAudioPlayer>()
+
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
 
     /**
@@ -126,6 +132,9 @@ class SendSpinEngine(
             // True when this reconfigures an active stream: audio queued
             // before it is in the previous format and must still play.
             val keepBuffered: Boolean,
+            // decodeGeneration and streamEpoch when the stream/start arrived
+            val generation: Int,
+            val epoch: Int,
         ) : DecodeTask()
         object Flush : DecodeTask()
         object Release : DecodeTask()
@@ -158,6 +167,22 @@ class SendSpinEngine(
     // Single-writer: only the WS-IO stream callbacks mutate it.
     @Volatile
     private var decodeGeneration = 0
+
+    // Which stream a format change belongs to. Moved on by a stream/start
+    // that begins a new stream, by stream/end and by releasePlayer, but not
+    // by stream/clear: a format change still applies after a clear. A
+    // switch whose stream is gone must not touch the output the later
+    // stream/start set up. Written on the client's thread and on main.
+    private val streamEpoch = AtomicInteger()
+
+    /**
+     * The output the host was last given. On a format change the retired
+     * player stays it until the new one plays, so the session reports the
+     * audio being heard rather than a new output waiting to start. Main
+     * thread.
+     */
+    var hostPlayer: SyncAudioPlayer? = null
+        private set
 
     init {
         decodeJob = scope.launch(decodeDispatcher) {
@@ -204,6 +229,8 @@ class SendSpinEngine(
         // chunks already in flight toward decodeChannel carry the old tag
         // and are dropped by the worker (#114).
         if (!keepBuffered) decodeGeneration++
+        val generation = decodeGeneration
+        val epoch = if (keepBuffered) streamEpoch.get() else streamEpoch.incrementAndGet()
 
         // Post decoder lifecycle to the single-owner decode worker via the
         // channel. FIFO ordering between StartStream and any subsequent
@@ -215,7 +242,7 @@ class SendSpinEngine(
         decoderReady = true
         scope.launch {
             decodeChannel.send(
-                DecodeTask.StartStream(codec, sampleRate, channels, bitDepth, codecHeader, keepBuffered)
+                DecodeTask.StartStream(codec, sampleRate, channels, bitDepth, codecHeader, keepBuffered, generation, epoch)
             )
         }
 
@@ -229,9 +256,13 @@ class SendSpinEngine(
 
             listener.onStreamStarted()
 
-            // The decode worker switches the output of an active stream,
-            // once the audio buffered in the old format has played.
+            // The decode worker switches the output of an active stream, in
+            // order with its chunks (switchOutputFormat).
             if (keepBuffered) return@launch
+
+            // A new stream: what a retired player still holds belongs to the
+            // last one, which can end without a stream/end (a server switch)
+            releaseRetiredPlayers()
 
             // Reuse existing player if format matches (DAC timestamps stay warm)
             val existingPlayer = player
@@ -289,6 +320,7 @@ class SendSpinEngine(
         scope.launch {
             Log.i(TAG, "[cmd-trace] T3 onStreamClear.post ts=${System.nanoTime() / 1_000_000} thread=${Thread.currentThread().name}")
             Log.d(TAG, "Stream clear - flushing audio buffer")
+            releaseRetiredPlayers()
             player?.clearBuffer()
         }
     }
@@ -298,6 +330,7 @@ class SendSpinEngine(
 
         // Invalidate the ending stream's pre-buffered chunks (issue #114).
         decodeGeneration++
+        streamEpoch.incrementAndGet()
         activeStream = null
 
         scope.launch {
@@ -305,6 +338,7 @@ class SendSpinEngine(
             Log.i(TAG, "Stream end - server terminated playback")
             // Enter idle mode: keep AudioTrack alive and writing silence
             // so DAC timestamps stay warm for the next stream start
+            releaseRetiredPlayers()
             player?.enterIdle()
         }
     }
@@ -312,6 +346,7 @@ class SendSpinEngine(
     /** The client reports `state="error"` while out of sync, and mutes until it is back. */
     fun onSyncMuteChanged(muted: Boolean) {
         scope.launch {
+            retiredPlayers.forEach { it.setMuted(SyncAudioPlayer.MuteReason.SYNC, muted) }
             player?.setMuted(SyncAudioPlayer.MuteReason.SYNC, muted)
         }
     }
@@ -320,6 +355,7 @@ class SendSpinEngine(
     fun onNetworkChanged() {
         scope.launch {
             Log.i(TAG, "Network changed - triggering audio player reanchor")
+            releaseRetiredPlayers()
             player?.clearBuffer()
         }
     }
@@ -333,10 +369,12 @@ class SendSpinEngine(
 
     /** The connection is gone: stop and release the output. */
     fun releasePlayer() {
+        streamEpoch.incrementAndGet()
+        releaseRetiredPlayers()
         player?.stop()
         player?.release()
         player = null
-        listener.onPlayerChanged(null)
+        announce(null)
     }
 
     /**
@@ -347,11 +385,18 @@ class SendSpinEngine(
         val p = player
         when (state) {
             PlaybackStateType.STOPPED -> {
+                releaseRetiredPlayers()
                 p?.clearBuffer()
                 p?.pause()
             }
-            PlaybackStateType.PAUSED -> p?.pause()
-            PlaybackStateType.PLAYING -> p?.resume()
+            PlaybackStateType.PAUSED -> {
+                retiredPlayers.forEach { it.pause() }
+                p?.pause()
+            }
+            PlaybackStateType.PLAYING -> {
+                retiredPlayers.forEach { it.resume() }
+                p?.resume()
+            }
             else -> {}
         }
     }
@@ -365,6 +410,7 @@ class SendSpinEngine(
         if (reason == SyncAudioPlayer.MuteReason.INTERRUPTION || reason == SyncAudioPlayer.MuteReason.VOICE) {
             if (muted) heldMutes += reason else heldMutes -= reason
         }
+        retiredPlayers.forEach { it.setMuted(reason, muted) }
         player?.setMuted(reason, muted)
     }
 
@@ -392,8 +438,47 @@ class SendSpinEngine(
 
         // audioDecoder is released by handleDecodeRelease on the decode
         // worker (invariant: only that coroutine mutates the field).
+        releaseRetiredPlayers()
         player?.release()
         player = null
+        hostPlayer = null
+    }
+
+    /** Give the host [p] as its output, if it is not already. Main thread. */
+    private fun announce(p: SyncAudioPlayer?) {
+        if (hostPlayer === p) return
+        hostPlayer = p
+        listener.onPlayerChanged(p)
+    }
+
+    /**
+     * Release the retired players now: the audio they still hold is no
+     * longer to be played. Main thread.
+     */
+    private fun releaseRetiredPlayers() {
+        retiredPlayers.forEach { it.release() }
+        retiredPlayers.clear()
+        announce(player)
+    }
+
+    /**
+     * Let [old] play out the audio it holds, received in the format before a
+     * change, beside the new player, and release it once it has. Main thread.
+     */
+    private fun retire(old: SyncAudioPlayer) {
+        retiredPlayers += old
+        scope.launch {
+            while (old in retiredPlayers && !old.hasPlayedOut()) delay(RETIRED_POLL_MS)
+            // What it last wrote is still passing through the mixer
+            delay(RETIRED_TAIL_MS)
+            if (retiredPlayers.remove(old)) {
+                Log.d(TAG, "Output in the previous format has played out - releasing it")
+                old.release()
+                // The next to play: another retired player, after a second
+                // change before this one's successor started
+                announce(retiredPlayers.firstOrNull() ?: player)
+            }
+        }
     }
 
     // ========== Decode worker ==========
@@ -460,6 +545,24 @@ class SendSpinEngine(
                 "header=${t.codecHeader?.size ?: 0} bytes"
         )
 
+        // On a format change the old decoder can still hold audio of chunks
+        // received in the old format ("Clients MUST keep buffered chunks"):
+        // it goes to the player that plays that format, before the release.
+        // That audio belongs to the generation the stream/start arrived in,
+        // so a clear or end since then discards it, and it waits for room
+        // like any other chunk.
+        val current = { t.generation == decodeGeneration && t.epoch == streamEpoch.get() }
+        val out = player
+        if (t.keepBuffered && current() && out != null) {
+            val held = audioDecoder?.drain().orEmpty()
+            Log.d(TAG, "Previous decoder handed back ${held.size} buffers (${held.sumOf { it.pcm.size }} bytes)")
+            for (audio in held) {
+                val samples = (audio.pcm.size / out.bytesPerFrame).toLong()
+                while (current() && !out.hasRoomFor(samples)) delay(FORMAT_SWITCH_POLL_MS)
+                out.queueChunk(audio.timestampUs, audio.pcm, current)
+            }
+        }
+
         // Release existing decoder and create new one for this stream.
         audioDecoder?.release()
         audioDecoder = null
@@ -480,30 +583,27 @@ class SendSpinEngine(
 
     /**
      * Format change on an active stream. Everything already queued in
-     * [player] was decoded in the previous format and must still be
-     * played, so when the PCM format differs the player is only replaced once
-     * its queue has drained. Suspending here holds back the chunks behind this
-     * task, which are in the new format. A stream/clear or stream/end bumps
-     * [decodeGeneration] and ends the wait early.
+     * [player] was decoded in the previous format and must still be played,
+     * so when the PCM format differs the old player is retired to play it
+     * out, and the new player is created at once beside it. Its track warms
+     * up while the old one plays, and its start gating places the first chunk
+     * in the new format where the old audio ends ("Servers MUST timestamp the
+     * first chunk in the new format to follow the last chunk in the previous
+     * format"), so there is no gap. The chunks behind this task are in the new
+     * format and go to the new player.
      */
-    private suspend fun switchOutputFormat(t: DecodeTask.StartStream) {
+    private suspend fun switchOutputFormat(t: DecodeTask.StartStream) = withContext(mainDispatcher) {
+        // Its stream has ended or been replaced: the later stream/start set
+        // up the output on this thread, ordered with this check
+        if (t.epoch != streamEpoch.get()) return@withContext
         val old = player
-        if (old != null && old.matchesFormat(t.sampleRate, t.channels, t.bitDepth)) return
-
-        Log.i(TAG, "Output format change on active stream - playing out ${old?.getBufferedDurationMs() ?: 0}ms of buffered audio first")
-        val generation = decodeGeneration
-        while (old != null && old === player && generation == decodeGeneration &&
-            old.getBufferedDurationMs() > 0
-        ) {
-            delay(FORMAT_SWITCH_POLL_MS)
+        if (old != null && old.matchesFormat(t.sampleRate, t.channels, t.bitDepth)) return@withContext
+        if (old != null) {
+            Log.i(TAG, "Output format change on active stream - the previous output plays out its " +
+                "${old.getBufferedDurationMs()}ms beside the new one")
+            retire(old)
         }
-
-        withContext(mainDispatcher) {
-            // Replaced or torn down while we waited (disconnect, new stream).
-            if (player !== old) return@withContext
-            old?.release()
-            createPlayer(t.sampleRate, t.channels, t.bitDepth)
-        }
+        createPlayer(t.sampleRate, t.channels, t.bitDepth, announceNow = old == null)
     }
 
     private fun handleDecodeFlush() {
@@ -516,8 +616,11 @@ class SendSpinEngine(
         decoderReady = false
     }
 
-    /** Creates and starts a [SyncAudioPlayer] for the given PCM format. Main thread. */
-    private fun createPlayer(sampleRate: Int, channels: Int, bitDepth: Int) {
+    /**
+     * Creates and starts a [SyncAudioPlayer] for the given PCM format. Main
+     * thread. Without [announceNow] the host is given it once it plays.
+     */
+    private fun createPlayer(sampleRate: Int, channels: Int, bitDepth: Int, announceNow: Boolean = true) {
         val timeFilter = client?.getTimeFilter()
         if (timeFilter == null) {
             Log.e(TAG, "Cannot start audio: time filter not available")
@@ -529,12 +632,16 @@ class SendSpinEngine(
         } else {
             0L  // Unlimited
         }
-        val created = newPlayer(timeFilter, sampleRate, channels, bitDepth, maxSamples).apply {
+        val created = newPlayer(timeFilter, sampleRate, channels, bitDepth, maxSamples)
+        created.apply {
             setStateCallback(object : SyncAudioPlayerCallback {
                 override fun onPlaybackStateChanged(state: SyncPlaybackState) {
                     scope.launch {
                         Log.d(TAG, "SyncAudioPlayer state changed: $state")
-                        listener.onPlayerStateChanged(state)
+                        if (state == SyncPlaybackState.PLAYING && (player === created || created in retiredPlayers)) {
+                            announce(created)
+                        }
+                        if (hostPlayer === created) listener.onPlayerStateChanged(state)
                     }
                 }
             })
@@ -546,15 +653,19 @@ class SendSpinEngine(
             start()
         }
         player = created
-        listener.onPlayerChanged(created)
+        if (announceNow) announce(created)
         Log.i(TAG, "SyncAudioPlayer created: ${sampleRate}Hz, ${channels}ch, ${bitDepth}bit")
     }
 
     private companion object {
         const val TAG = "SendSpinEngine"
 
-        // Poll interval while an output format switch waits for the audio
-        // buffered in the previous format to play out.
+        // Poll interval while the decoder waits for room in a capped queue.
         const val FORMAT_SWITCH_POLL_MS = 20L
+
+        // A retired player is checked this often for having played out, and
+        // released this long after, once what it last wrote is through.
+        const val RETIRED_POLL_MS = 50L
+        const val RETIRED_TAIL_MS = 100L
     }
 }

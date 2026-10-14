@@ -31,6 +31,9 @@ abstract class MediaCodecDecoder(
          * the codec time to free a buffer by processing output.
          */
         private const val MAX_INPUT_RETRIES = 3
+
+        // How long drain() waits for the codec to hand back what it holds
+        private const val DRAIN_TIMEOUT_NS = 100_000_000L
     }
 
     protected var mediaCodec: MediaCodec? = null
@@ -121,6 +124,48 @@ abstract class MediaCodecDecoder(
 
         drainOutput(codec, output)
 
+        return output
+    }
+
+    /**
+     * Signal end of stream and collect everything the codec still holds,
+     * up to the end-of-stream output or [DRAIN_TIMEOUT_NS].
+     */
+    override fun drain(): List<DecodedAudio> {
+        val codec = mediaCodec ?: return emptyList()
+        val output = ArrayList<DecodedAudio>()
+        try {
+            // Every input slot can be taken by a codec that is behind, which
+            // is when it holds output: collect that, then try again.
+            var inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
+            for (attempt in 1..MAX_INPUT_RETRIES) {
+                if (inputIndex >= 0) break
+                drainOutput(codec, output)
+                inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
+            }
+            if (inputIndex < 0) return output
+            codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            val bufferInfo = MediaCodec.BufferInfo()
+            val deadline = System.nanoTime() + DRAIN_TIMEOUT_NS
+            while (System.nanoTime() < deadline) {
+                val outputIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
+                if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    outputFormat = codec.outputFormat
+                }
+                if (outputIndex < 0) continue
+                val outBuffer = codec.getOutputBuffer(outputIndex)
+                if (outBuffer != null && bufferInfo.size > 0) {
+                    val pcmData = ByteArray(bufferInfo.size)
+                    outBuffer.position(bufferInfo.offset)
+                    outBuffer.get(pcmData, 0, bufferInfo.size)
+                    output += DecodedAudio(bufferInfo.presentationTimeUs, pcmData)
+                }
+                codec.releaseOutputBuffer(outputIndex, false)
+                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error draining decoder", e)
+        }
         return output
     }
 

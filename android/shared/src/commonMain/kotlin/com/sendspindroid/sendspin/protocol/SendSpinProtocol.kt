@@ -81,7 +81,6 @@ object SendSpinProtocol {
     object AudioFormat {
         const val SAMPLE_RATE = 48000
         const val CHANNELS = 2
-        const val CHANNELS_MONO = 1
         const val BIT_DEPTH = 16
         const val DEFAULT_CODEC = "pcm"
     }
