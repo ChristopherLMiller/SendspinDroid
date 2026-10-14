@@ -1055,8 +1055,10 @@ class SendSpin(
 
     /**
      * Disconnect from the current server because the user asked to.
+     * [onFlushed] runs, on any thread, once the goodbye is out.
      */
-    fun disconnect() = leave(GoodbyeReason.USER_REQUEST, reconnect = false)
+    fun disconnect(onFlushed: () -> Unit = {}) =
+        leave(GoodbyeReason.USER_REQUEST, reconnect = false, onFlushed)
 
     /**
      * The user removed the pairing record [pskId] from this device. If it is
@@ -1080,22 +1082,36 @@ class SendSpin(
      * open the next connection or to cancel the coroutine scopes, and a
      * plain close() drops whatever is still queued.
      */
-    private fun leave(reason: GoodbyeReason, reconnect: Boolean) {
+    private fun leave(reason: GoodbyeReason, reconnect: Boolean, onFlushed: () -> Unit = {}) {
         Log.d(TAG, "Disconnecting (${reason.wire})")
-        closeWith(encodeGoodbye(reason), reason.wire, reconnect)
+        closeWith(encodeGoodbye(reason), reason.wire, reconnect, onFlushed)
     }
 
-    /** End the connection, with [last] as the final frames on it if there are any. */
-    private fun closeWith(last: List<ByteArray>, why: String, reconnect: Boolean) {
-        val closing = endConnection(TransportState.Idle, reconnect) ?: return
+    /**
+     * End the connection, with [last] as the final frames on it if there are
+     * any. [onFlushed] runs, on any thread, once they are as far as the
+     * transport takes them, at once if there was nothing to send them on.
+     */
+    private fun closeWith(
+        last: List<ByteArray>,
+        why: String,
+        reconnect: Boolean,
+        onFlushed: () -> Unit = {},
+    ) {
+        val closing = endConnection(TransportState.Idle, reconnect)
+        if (closing == null) {
+            onFlushed()
+            return
+        }
         if (last.isEmpty()) {
             // Nothing to flush: the connection never got as far as an
             // activation, so there is no one to say goodbye to.
             closing.close(1000, why)
             closing.destroy()
+            onFlushed()
         } else {
             last.forEach { closing.send(it) }
-            closing.closeAfterFlush(1000, why)
+            closing.closeAfterFlush(1000, why, onFlushed)
         }
     }
 
