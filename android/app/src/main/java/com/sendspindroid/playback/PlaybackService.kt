@@ -448,6 +448,10 @@ class PlaybackService : MediaLibraryService() {
         // loop carries on whenever the device is awake.
         private const val RECONNECT_LOCK_HOLD_MS = 10 * 60 * 1000L
 
+        // How long COMMAND_EXIT waits for the goodbye to go out before it
+        // stops the service anyway.
+        private const val EXIT_FLUSH_TIMEOUT_MS = 2_000L
+
         // How long boot auto-connect waits for mDNS to re-resolve a saved local
         // server's current address before falling back to the stored one (#158).
         private const val MDNS_AUTOCONNECT_TIMEOUT_MS = 5_000L
@@ -2169,9 +2173,10 @@ class PlaybackService : MediaLibraryService() {
     /**
      * Disconnects from the current server.
      */
-    fun disconnectFromServer() {
+    fun disconnectFromServer(onFlushed: () -> Unit = {}) {
         Log.d(TAG, "Disconnecting from server")
-        sendSpinClient?.disconnect()
+        val client = sendSpinClient
+        if (client == null) onFlushed() else client.disconnect(onFlushed)
     }
 
     /**
@@ -3166,10 +3171,22 @@ class PlaybackService : MediaLibraryService() {
                     exiting = true
                     coordinator.cancelReconnect()
                     setCurrentServer(null)
-                    disconnectFromServer()
-                    connectionMode.stop()
-                    stopForegroundNotification()
-                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    // The rest once the goodbye is out: taking the listener
+                    // down first could cut the socket it is going out on. The
+                    // result says the same, so a caller may end the process
+                    // after it (#330).
+                    val result = SettableFuture.create<SessionResult>()
+                    var done = false
+                    val finish = Runnable {
+                        if (done) return@Runnable
+                        done = true
+                        connectionMode.stop()
+                        stopForegroundNotification()
+                        result.set(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    mainHandler.postDelayed(finish, EXIT_FLUSH_TIMEOUT_MS)
+                    disconnectFromServer { mainHandler.post(finish) }
+                    result
                 }
 
                 COMMAND_SET_SEARCH_FOR_SERVERS -> {
