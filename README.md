@@ -97,7 +97,7 @@ SendSpin Player is built with native Kotlin:
 - **Jetpack Compose** for the whole interface
 - **A Media3 `MediaLibraryService`** that owns the connection and playback, for background audio, notifications and Android Auto
 - **A shared Kotlin Multiplatform module** for the SendSpin protocol, encryption and clock synchronization
-- **A player library** (`:player`) with the client, the synced `AudioTrack` output and the decoders, and no UI, so another app can host the player
+- **A player library** (`:player`) with the client, the decode pipeline, the synced `AudioTrack` output and the decoders, and no UI, so another app can host the player
 - **`AudioTrack`** for output, with playback aligned to the server's clock
 - **Coroutines** for async operations and WebSocket communication
 

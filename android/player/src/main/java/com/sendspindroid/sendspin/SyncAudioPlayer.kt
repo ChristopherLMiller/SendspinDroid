@@ -690,6 +690,8 @@ class SyncAudioPlayer(
         SYNC,
         /** Another app has the audio output (focus loss or output disconnect). */
         INTERRUPTION,
+        /** The host is listening for speech, e.g. after a wake word. */
+        VOICE,
     }
 
     /**
