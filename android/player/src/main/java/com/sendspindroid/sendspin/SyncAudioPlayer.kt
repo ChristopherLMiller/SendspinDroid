@@ -36,44 +36,21 @@ import kotlin.math.abs
  * This state machine ensures synchronized playback by controlling when audio starts
  * and handling sync errors gracefully.
  *
- * ## State Diagram
- * ```
- *                      +--------------+
- *          +---------->| INITIALIZING |<------------------------------+
- *          |           +------+-------+                               |
- *          |                  | first chunk received                  |
- *          |                  | (queueChunk)                          |
- *          |                  v                                       |
- *          |      +-----------------------+                           |
- *          |      |  WAITING_FOR_START    |<------+                   |
- *          |      |  (buffer filling)     |       |                   |
- *          |      +-----------+-----------+       |                   |
- *          |                  | buffer >= 200ms   |                   |
- *          |                  | AND scheduled     | reanchor chunk    |
- *          |                  | start time        | received          |
- *          |                  | reached           |                   |
- *          |                  v                   |                   |
- *          |           +--------------+     +-----+------+            |
- *          |           |   PLAYING    |---->| REANCHORING|------------+
- *          |           |              |     +------------+
- *          |           +--------------+      large sync error
- *          |                                 (> 500ms)
- *          |
- *          +--- stop() / clearBuffer() from any state
- * ```
- *
  * ## State Transition Table
  * ```
  * ┌─────────────────────┬─────────────────────┬─────────────────────────────────────────────────┐
  * │ From State          │ To State            │ Trigger / Condition                             │
  * ├─────────────────────┼─────────────────────┼─────────────────────────────────────────────────┤
  * │ INITIALIZING        │ WAITING_FOR_START   │ First audio chunk received in queueChunk()     │
- * │ WAITING_FOR_START   │ PLAYING             │ Buffer >= 200ms AND scheduled start time       │
- * │                     │                     │ reached (handleStartGating)                    │
- * │ PLAYING             │ REANCHORING         │ Sync error > 500ms (triggerReanchor)           │
- * │ REANCHORING         │ INITIALIZING        │ After clearing buffers (triggerReanchor)       │
- * │ REANCHORING         │ WAITING_FOR_START   │ New chunk received during reanchor             │
- * │ Any State           │ INITIALIZING        │ stop() or clearBuffer() called                 │
+ * │ WAITING_FOR_START   │ PLAYING             │ Queue head due at the write cursor             │
+ * │                     │                     │ (handleStartGating)                            │
+ * │ PLAYING             │ REANCHORING         │ Sync error > 500ms on consecutive readings     │
+ * │                     │                     │ (triggerReanchor), or resume() after a pause   │
+ * │ REANCHORING         │ PLAYING             │ Queue head due at the write cursor             │
+ * │                     │                     │ (handleStartGating)                            │
+ * │ PLAYING             │ INITIALIZING        │ Output ran dry with nothing queued, or it is   │
+ * │                     │                     │ already past the start of a timestamp gap      │
+ * │ Any State           │ INITIALIZING        │ stop(), clearBuffer() or enterIdle() called    │
  * └─────────────────────┴─────────────────────┴─────────────────────────────────────────────────┘
  * ```
  *
@@ -84,11 +61,10 @@ import kotlin.math.abs
  * No audio output occurs. Transitions to WAITING_FOR_START when first chunk arrives.
  *
  * ### WAITING_FOR_START
- * Buffer is being filled with audio chunks. A scheduled start time has been computed
- * based on the first chunk's server timestamp. Waits until:
- * - Buffer has at least 200ms of audio (MIN_BUFFER_BEFORE_START_MS)
- * - Scheduled start time is reached or passed
- * During this state, the scheduled start time is continuously updated as time sync improves.
+ * Start gating: the track is kept fed with silence until the queue head is
+ * due at the write cursor, then the head is aligned to it in one shot (late
+ * leading audio dropped, or silence padded). Waits for the time filter and
+ * for a usable DAC timestamp first.
  *
  * ### PLAYING
  * Active synchronized playback with sample insert/drop corrections.
@@ -98,10 +74,11 @@ import kotlin.math.abs
  * - 500ms startup grace period before corrections begin
  *
  * ### REANCHORING
- * Transient state triggered by large sync error (> 500ms).
- * Clears all buffers and resets timing state to recover from severe desync.
- * Has a 5-second cooldown to prevent thrashing. Transitions to INITIALIZING
- * immediately, then to WAITING_FOR_START when new chunk arrives.
+ * Start gating again for the queue that is already there, after an error too
+ * large to correct in place or a pause. The queue is kept, so only the audio
+ * that went late is dropped; the track is flushed first when its audio is
+ * late too. A reanchor that has not brought the error back in range blocks
+ * another for 5 seconds, to prevent thrashing.
  */
 /**
  * Default production [AudioSink] factory for [SyncAudioPlayer].
@@ -167,13 +144,13 @@ enum class PlaybackState {
     /** Waiting for first audio chunk and time sync to be ready. */
     INITIALIZING,
 
-    /** Buffer filling, scheduled start time computed. Waiting for enough buffer and start time. */
+    /** Start gating: waiting for the queue head to come due at the write cursor. */
     WAITING_FOR_START,
 
     /** Active synchronized playback with sample insert/drop corrections. */
     PLAYING,
 
-    /** Large sync error exceeded threshold. Resetting timing state to recover. */
+    /** Start gating again for the queue already there, after a large sync error or a pause. */
     REANCHORING
 }
 
@@ -200,7 +177,8 @@ interface SyncAudioPlayerCallback {
  * - Behind schedule: Drop frames to catch up (skip input samples)
  * - Ahead of schedule: Insert duplicate frames to slow down
  * - At most one 21us step per 20ms (0.1% speed change)
- * - Past +/-1ms, at startup and after an underrun: one-shot resync instead
+ * - Past +/-1ms: one-shot resync instead
+ * - At startup, after the output runs dry and past +/-500ms: start gating
  *
  * ## Architecture
  * ```
@@ -253,9 +231,20 @@ class SyncAudioPlayer(
         // An AudioTimestamp older than this means the track has stalled (underrun)
         private const val TIMESTAMP_MAX_AGE_US = 100_000L
 
-        // Start gating configuration (from Python reference)
-        private const val MIN_BUFFER_BEFORE_START_MS = 200  // Wait for 200ms buffer before scheduling
-        private const val REANCHOR_THRESHOLD_US = 500_000L  // 500ms error triggers reanchor
+        // An error this large is not corrected in place: the queue goes back
+        // through start gating once this many consecutive readings agree, so a
+        // single bad timestamp cannot cause it.
+        private const val REANCHOR_THRESHOLD_US = 500_000L
+        private const val REANCHOR_CONFIRM_READINGS = 2
+
+        // With nothing queued, the output counts as run dry once less than this
+        // is left ahead of the playback head, where the mixer reads
+        private const val DRY_AHEAD_US = 10_000L
+
+        // The least the track itself holds ahead of its playback head, where
+        // the mixer reads, whatever the timestamp counts below it; after the
+        // output ran dry, all the silence the keepalive keeps there
+        private const val TRACK_CUSHION_US = 50_000L
 
         // DAC-position-aware startup alignment
         private const val TARGET_PENDING_US = 250_000L      // 250ms target write-to-DAC distance
@@ -278,6 +267,11 @@ class SyncAudioPlayer(
 
         // Gap/overlap detection
         private const val GAP_THRESHOLD_US = 10_000L  // 10ms minimum gap before filling with silence
+        // A gap is filled in pieces no longer than this, so pacing and a clear
+        // still apply while it plays, and with no more than the cap in all;
+        // beyond that the sync error realigns the next audio.
+        private const val GAP_FILL_PIECE_US = 100_000L
+        private const val MAX_GAP_FILL_US = 5_000_000L
         private const val DISCONTINUITY_THRESHOLD_US = 100_000L  // 100ms gap indicates discontinuity (for logging)
 
         // Logging and diagnostics
@@ -359,11 +353,31 @@ class SyncAudioPlayer(
     private var scheduledStartLoopTimeUs: Long? = null   // When to start in loop time
     private var firstServerTimestampUs: Long? = null     // First chunk's server timestamp
     private var lastReanchorTimeUs: Long = 0             // Cooldown tracking for reanchor
+    // A reading back under REANCHOR_THRESHOLD_US since the last reanchor. The
+    // cooldown holds a reanchor back only while the previous one has not
+    // settled, so a new step after a realignment that worked is not left
+    // uncorrected. Audio thread only.
+    private var reanchorSettled = true
 
     // DAC timestamp stability tracking for start gating
     private var consecutiveValidTimestamps = 0       // counts consecutive valid getTimestamp() reads
     private var dacTimestampsStable = false           // true once TIMESTAMP_STABLE_READS reached; start gating only
     private var lastUsableTimestampAtUs = 0L          // last usable read, or the start/flush since which there was none
+    private var lastCountedTimestampNs = Long.MIN_VALUE  // timestamp behind the last read counted as valid
+    private var lastDacTimestampNs = Long.MIN_VALUE   // timestamp behind the last dacTimeOfNextWriteUs() value
+
+    // After the output has run dry the keepalive keeps only a small cushion,
+    // TRACK_CUSHION_US ahead of the playback head, so audio arriving just
+    // in time is placed on time instead of behind 200 ms of silence and
+    // dropped as late. Measured at the head, not by the timestamp: that also
+    // counts the latency below the mixer, which on Bluetooth is more than the
+    // cushion, and the track would starve. Audio thread only.
+    private var postDryCushion = false
+
+    // Whether the last loop iteration was PLAYING: leaving it without a reset
+    // (the output ran dry, or a gap already passed) has to start the timestamp
+    // checks of start gating over. Audio thread only.
+    private var loopWasPlaying = false
 
     // DAC-aware alignment wait: rate-limit the per-iteration "waiting for alignment"
     // log so a 2-12s wait emits ~3-13 lines instead of 200-1200. Entry log fires once
@@ -426,6 +440,8 @@ class SyncAudioPlayer(
     private var dropEveryNFrames: Int = 0        // Dropping a frame every N frames (speed up), 0 = off
     private var framesSinceCorrection: Int = 0   // Frames written since the last correction slot
     private var snapDropFrames: Long = 0         // One-shot resync: leading frames still to drop
+    private var largeErrorReadings = 0           // Consecutive readings past REANCHOR_THRESHOLD_US, each its own timestamp
+    private var largeErrorTimestampNs = Long.MIN_VALUE  // Timestamp the last of them came from
 
     // Startup grace period tracking (Windows SDK style)
     // No corrections applied until STARTUP_GRACE_PERIOD_US after entering PLAYING state
@@ -657,6 +673,10 @@ class SyncAudioPlayer(
             // of the old audio is heard.
             resetRequested = true
 
+            // What is queued went late during the pause: start gating places
+            // it again instead of the loop writing it straight on.
+            if (playbackState == PlaybackState.PLAYING) realignQueue()
+
             // Reset grace period to allow sync to stabilize after resume
             playingStateEnteredAtUs = nowUs
 
@@ -794,6 +814,22 @@ class SyncAudioPlayer(
     }
 
     /**
+     * Send what is queued back through start gating, which drops the audio
+     * that has gone late and waits for audio that is early ("Large errors and
+     * startup"). Unlike a clear, nothing queued is discarded: the server does
+     * not send it again. Whether the track is flushed first is the caller's
+     * choice, made by raising [resetRequested].
+     *
+     * Caller holds [stateLock].
+     */
+    private fun realignQueue() {
+        val head = chunkQueue.peek()
+        firstServerTimestampUs = head?.serverTimeMicros
+        scheduledStartLoopTimeUs = head?.let { timeFilter.serverToClient(it.serverTimeMicros) }
+        setPlaybackState(if (head == null) PlaybackState.INITIALIZING else PlaybackState.REANCHORING)
+    }
+
+    /**
      * Flush the track and start everything measured from it over.
      *
      * Audio thread only, called from the playback loop when [resetRequested]
@@ -818,7 +854,10 @@ class SyncAudioPlayer(
         consecutiveValidTimestamps = 0
         dacTimestampsStable = false
         lastUsableTimestampAtUs = nowNs() / 1000
+        lastCountedTimestampNs = Long.MIN_VALUE
         lastDacPacingLogTimeUs = 0L
+        postDryCushion = false
+        loopWasPlaying = false
 
         // Reset sync error tracking
         serverTimelineCursor = 0L
@@ -828,6 +867,8 @@ class SyncAudioPlayer(
         samplesReadSinceStart = 0L
         syncErrorUs = 0L
         syncErrorFilter.reset()
+        largeErrorReadings = 0
+        largeErrorTimestampNs = Long.MIN_VALUE
 
         // Reset sample insert/drop correction state
         insertEveryNFrames = 0
@@ -1063,27 +1104,18 @@ class SyncAudioPlayer(
 
                 // Only fill gaps larger than threshold (small gaps are normal network jitter)
                 if (gapUs > GAP_THRESHOLD_US) {
-                    val gapFrames = ((gapUs * sampleRate) / 1_000_000).toInt()
-                    val silenceBytes = gapFrames * bytesPerFrame
-                    val silenceData = ByteArray(silenceBytes)  // Zeros = silence
-
-                    val silenceChunk = AudioChunk(
-                        serverTimeMicros = expectedNext,
-                        pcmData = silenceData,
-                        sampleCount = gapFrames
-                    )
-                    evictIfOverCapacity(gapFrames.toLong())
-                    chunkQueue.add(silenceChunk)
-                    totalQueuedSamples.addAndGet(gapFrames.toLong())
-
-                    // Update statistics
-                    gapsFilled++
-                    val gapMs = gapUs / 1000
-                    gapSilenceMs += gapMs
-
-                    // Update expected next timestamp to account for inserted silence
-                    val silenceDurationUs = (gapFrames * 1_000_000L) / sampleRate
-                    expectedNextTimestampUs = expectedNext + silenceDurationUs
+                    when {
+                        // Nothing queued and not playing: start gating places
+                        // this chunk by its own timestamp.
+                        chunkQueue.isEmpty() && playbackState != PlaybackState.PLAYING -> Unit
+                        // The output is already past where the gap starts, so
+                        // silence for it would be late from its first frame.
+                        // Start gating places this chunk instead.
+                        playbackState == PlaybackState.PLAYING && timeFilter.isReady &&
+                            timeFilter.serverToClient(expectedNext) <= nowNs() / 1000 ->
+                            setPlaybackState(PlaybackState.INITIALIZING)
+                        else -> fillGap(expectedNext, gapUs, (pcmData.size / bytesPerFrame).toLong())
+                    }
                 }
             }
             // Handle overlap: trim the start of the chunk
@@ -1149,9 +1181,8 @@ class SyncAudioPlayer(
         // State Machine Transitions in queueChunk()
         // ====================================================================
         // This is where incoming audio chunks trigger state transitions.
-        // The key transitions here are:
+        // The key transition here is:
         //   INITIALIZING -> WAITING_FOR_START (first chunk establishes timing)
-        //   REANCHORING  -> WAITING_FOR_START (recovery from large sync error)
         //
         // See PlaybackState enum for the complete state diagram.
         // ====================================================================
@@ -1167,8 +1198,8 @@ class SyncAudioPlayer(
                 PlayerLog.Audio.i("First chunk received: serverTime=${workingServerTimeMicros/1000}ms, " +
                         "scheduled start at ${clientPlayTime/1000}ms, transitioning to WAITING_FOR_START")
             }
-            PlaybackState.WAITING_FOR_START -> {
-                // NO TRANSITION - Still in WAITING_FOR_START
+            PlaybackState.WAITING_FOR_START, PlaybackState.REANCHORING -> {
+                // NO TRANSITION - start gating still has to place the queue head.
                 // Action: Update scheduled start time as time sync improves.
                 // The time filter's offset estimate improves with more samples,
                 // so we recompute the client play time using the original server timestamp.
@@ -1177,24 +1208,50 @@ class SyncAudioPlayer(
                 if (firstTs != null) {
                     scheduledStartLoopTimeUs = timeFilter.serverToClient(firstTs)
                 }
-                // Actual transition to PLAYING happens in playback loop's handleStartGating()
-                // when buffer >= 200ms AND scheduled start time is reached.
-            }
-            PlaybackState.REANCHORING -> {
-                // TRANSITION: REANCHORING -> WAITING_FOR_START
-                // Trigger: New chunk arrives after reanchor cleared all buffers
-                // Action: Treat this as the new "first" chunk, establish new timing anchor.
-                // This completes the reanchor recovery - we have fresh timing reference.
-                firstServerTimestampUs = workingServerTimeMicros
-                scheduledStartLoopTimeUs = clientPlayTime
-                setPlaybackState(PlaybackState.WAITING_FOR_START)
-                PlayerLog.Sync.i("Reanchoring: new first chunk at serverTime=${workingServerTimeMicros/1000}ms")
+                // Actual transition to PLAYING happens in playback loop's
+                // handleStartGating() once the queue head is due.
             }
             PlaybackState.PLAYING -> {
                 // NO TRANSITION - Normal chunk processing: chunks added to
                 // queue for playback.
             }
         }
+    }
+
+    /**
+     * Queue silence for the gap of [gapUs] that starts at [gapStartUs], in
+     * pieces of at most [GAP_FILL_PIECE_US] and no more than
+     * [MAX_GAP_FILL_US] in all. Under a queue cap the silence takes only the
+     * room left beside the [incomingFrames] of the chunk after the gap: it
+     * never evicts queued audio, which is the audio due next. What is left
+     * of the gap shows up as an early sync error and is realigned from there.
+     *
+     * Called from [processChunk], with [stateLock] held.
+     */
+    private fun fillGap(gapStartUs: Long, gapUs: Long, incomingFrames: Long) {
+        var totalFrames = (minOf(gapUs, MAX_GAP_FILL_US) * sampleRate) / 1_000_000
+        if (maxQueueSamples > 0) {
+            totalFrames = minOf(totalFrames, maxQueueSamples - totalQueuedSamples.get() - incomingFrames)
+                .coerceAtLeast(0)
+        }
+        if (totalFrames == 0L) return
+        val pieceFrames = (GAP_FILL_PIECE_US * sampleRate) / 1_000_000
+        var filledFrames = 0L
+        while (filledFrames < totalFrames) {
+            val frames = minOf(pieceFrames, totalFrames - filledFrames).toInt()
+            chunkQueue.add(AudioChunk(
+                serverTimeMicros = gapStartUs + (filledFrames * 1_000_000L) / sampleRate,
+                pcmData = ByteArray(frames * bytesPerFrame),  // Zeros = silence
+                sampleCount = frames
+            ))
+            totalQueuedSamples.addAndGet(frames.toLong())
+            filledFrames += frames
+        }
+
+        gapsFilled++
+        gapSilenceMs += (filledFrames * 1000L) / sampleRate
+        // Update expected next timestamp to account for inserted silence
+        expectedNextTimestampUs = gapStartUs + (filledFrames * 1_000_000L) / sampleRate
     }
 
     // ========================================================================
@@ -1215,6 +1272,8 @@ class SyncAudioPlayer(
         samplesReadSinceStart = 0L
         syncErrorUs = 0L
         syncErrorFilter.reset()
+        largeErrorReadings = 0
+        largeErrorTimestampNs = Long.MIN_VALUE
     }
 
     /**
@@ -1319,12 +1378,18 @@ class SyncAudioPlayer(
         // One-shot alignment of the head chunk to the write cursor: silence up
         // to its start time if early, or drop its late leading frames.
         val finalErr = alignedHead.serverTimeMicros - writeCursorServerUs
+        // The late audio dropped can sit in front of a gap in the timeline:
+        // a head that is still not due waits like any other, so the silence
+        // padded here, with the lock held, stays within START_PAD_MAX_US.
+        if (finalErr > START_PAD_MAX_US) return true
         val alignFrames = (abs(finalErr) * sampleRate) / 1_000_000
         if (finalErr >= 0) {
+            snapDropFrames = 0
             writeSilence(track, alignFrames)
         } else {
             snapDropFrames = alignFrames
         }
+        postDryCushion = false
 
         firstServerTimestampUs = alignedHead.serverTimeMicros
         scheduledStartLoopTimeUs = timeFilter.serverToClient(alignedHead.serverTimeMicros)
@@ -1370,9 +1435,31 @@ class SyncAudioPlayer(
      */
     private fun dacTimeWithoutTimestampUs(track: AudioSink, nowMicros: Long): Long? {
         if (nowMicros - lastUsableTimestampAtUs <= TIMESTAMP_WAIT_MAX_US) return null
-        val headFrames = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL  // unsigned 32-bit counter
-        val pendingFrames = (totalFramesWritten.get() - headFrames).coerceAtLeast(0)
+        val pendingFrames = framesAhead(totalFramesWritten.get(), track.playbackHeadPosition.toLong())
+            .coerceAtLeast(0)
         return nowMicros + (pendingFrames * 1_000_000L) / sampleRate
+    }
+
+    /**
+     * Frames written that are still ahead of [position], a frame position
+     * read from the track. AudioTrack positions keep only their low 32 bits
+     * and wrap (about every 25 hours at 48 kHz), while [totalFramesWritten]
+     * does not, so the difference is taken in 32 bits. What is really
+     * pending is always far below 2^31 frames.
+     */
+    private fun framesAhead(written: Long, position: Long): Long = (written - position).toInt().toLong()
+
+    /**
+     * How long the audio already written keeps the track itself fed: written
+     * frames ahead of the playback head, which is where the mixer reads. The
+     * timestamp is no use here: it counts the latency below the mixer as
+     * pending, so on a Bluetooth route the track could run dry while it still
+     * reported a couple of hundred milliseconds.
+     */
+    private fun writtenAheadUs(track: AudioSink): Long {
+        val pendingFrames = framesAhead(totalFramesWritten.get(), track.playbackHeadPosition.toLong())
+            .coerceAtLeast(0)
+        return (pendingFrames * 1_000_000L) / sampleRate
     }
 
     /**
@@ -1387,21 +1474,42 @@ class SyncAudioPlayer(
     private fun writeSilenceKeepAlive() {
         val track = audioSink ?: return
 
-        val pendingUs = getPendingToDacUs(track)
-        if (pendingUs <= SILENCE_KEEPALIVE_THRESHOLD_US) {
-            // Top the buffer back up to the threshold plus one 10ms block. A fixed
-            // 10ms per loop iteration is slightly less than real time, so the track
-            // would drain and sit in permanent underrun. Without a timestamp
-            // (pendingUs == 0) the depth is unknown, so write the one block only.
-            val deficitUs = if (pendingUs > 0) SILENCE_KEEPALIVE_THRESHOLD_US - pendingUs else 0L
-            writeSilence(track, (deficitUs * sampleRate) / 1_000_000 + silenceFrameCount)
+        if (postDryCushion) {
+            // A small cushion ahead of the playback head: the head is always
+            // there, timestamp or not, so the depth is always known.
+            val aheadUs = writtenAheadUs(track)
+            if (aheadUs <= TRACK_CUSHION_US) {
+                writeSilence(track, ((TRACK_CUSHION_US - aheadUs) * sampleRate) / 1_000_000 + silenceFrameCount)
+            }
+        } else {
+            val pendingUs = getPendingToDacUs(track)
+            val aheadUs = writtenAheadUs(track)
+            if (pendingUs <= SILENCE_KEEPALIVE_THRESHOLD_US || aheadUs <= TRACK_CUSHION_US) {
+                // Top the buffer back up to the threshold plus one 10ms block. A fixed
+                // 10ms per loop iteration is slightly less than real time, so the track
+                // would drain and sit in permanent underrun. Without a timestamp
+                // (pendingUs == 0) the depth is unknown, so only the floor below
+                // applies. The threshold is measured by the timestamp, which counts
+                // the latency below the mixer: where that is more than the
+                // threshold the track itself would starve, so it never holds less
+                // than the cushion ahead of its playback head.
+                val deficitUs = maxOf(
+                    if (pendingUs > 0) SILENCE_KEEPALIVE_THRESHOLD_US - pendingUs else 0L,
+                    TRACK_CUSHION_US - aheadUs,
+                ).coerceAtLeast(0L)
+                writeSilence(track, (deficitUs * sampleRate) / 1_000_000 + silenceFrameCount)
+            }
         }
 
         // Start gating waits for consecutive usable reads (DAC has started,
-        // track is running)
+        // track is running). A timestamp counts once: one that has not moved
+        // on since the last read is a stalled track's, frozen where it stopped.
         if (dacTimeOfNextWriteUs(track) != null) {
             lastUsableTimestampAtUs = nowNs() / 1000
-            consecutiveValidTimestamps++
+            if (lastDacTimestampNs != lastCountedTimestampNs) {
+                lastCountedTimestampNs = lastDacTimestampNs
+                consecutiveValidTimestamps++
+            }
             if (consecutiveValidTimestamps >= TIMESTAMP_STABLE_READS && !dacTimestampsStable) {
                 dacTimestampsStable = true
                 PlayerLog.Sync.i("DAC timestamps stable after $consecutiveValidTimestamps consecutive reads")
@@ -1412,10 +1520,18 @@ class SyncAudioPlayer(
     }
 
     /**
-     * Trigger a reanchor - reset sync state due to large error.
+     * Trigger a reanchor: an error too large to correct in place, such as a
+     * step in output_delay_ms or the sync offset, or in the time filter.
      *
-     * Called when sync error exceeds REANCHOR_THRESHOLD_US.
-     * Respects cooldown to avoid thrashing.
+     * The queue is kept and goes back through start gating ([realignQueue]),
+     * so the cost is the step itself. Late: the track is flushed, its audio
+     * being late too, and start gating drops the late part of the queue.
+     * Early: what the track holds plays out and silence follows until the
+     * queue head is due, as the spec's one-shot resync inserts silence.
+     *
+     * A cooldown holds it back only while the previous reanchor has not
+     * brought the error back in range, so a realignment that does not work
+     * cannot repeat in a tight loop.
      *
      * @return true if reanchor was triggered, false if still in cooldown
      */
@@ -1423,18 +1539,17 @@ class SyncAudioPlayer(
         val nowMicros = nowNs() / 1000
         val timeSinceLastReanchor = nowMicros - lastReanchorTimeUs
 
-        if (timeSinceLastReanchor < REANCHOR_COOLDOWN_US) {
+        if (!reanchorSettled && timeSinceLastReanchor < REANCHOR_COOLDOWN_US) {
             return false
         }
 
-        PlayerLog.Sync.w("Triggering reanchor: clearing buffers and resetting state")
+        PlayerLog.Sync.w("Large sync error: ${syncErrorUs / 1000}ms - realigning the queue through start gating")
 
         lastReanchorTimeUs = nowMicros
+        reanchorSettled = false
         stateLock.withLock {
-            setPlaybackState(PlaybackState.REANCHORING)
-            // Back to INITIALIZING to wait for new chunks; the loop resets
-            // on its next iteration
-            clearQueueAndRequestReset()
+            if (syncErrorUs > 0) resetRequested = true
+            realignQueue()
         }
         syncCorrections++
         reanchorCount++
@@ -1490,8 +1605,35 @@ class SyncAudioPlayer(
             resetPlayback()
         }
 
+        // Left PLAYING without a reset: the output ran dry, a gap was already
+        // passed, or an early realignment. No one-shot drop meant for the
+        // audio before carries over, and only a small cushion of silence is
+        // kept meanwhile (postDryCushion). A track with frames still ahead of
+        // its playback head, and giving fresh timestamps, is running: the
+        // cushion lands before the mixer next reads, and start gating can use
+        // the timestamps at once. Once the mixer has taken everything it may
+        // already have mixed a cycle without the track, a gap the last
+        // timestamp knows nothing of, and one under the age limit can be a
+        // stalled track's, frozen. So its checks start over, from fresh
+        // reads. The wait for a timestamp restarts only on an output that has
+        // been giving them: one that never has keeps starting from the
+        // playback head.
+        val state = playbackState
+        if (loopWasPlaying && state != PlaybackState.PLAYING) {
+            val track = audioSink
+            if (track == null || writtenAheadUs(track) == 0L || dacTimeOfNextWriteUs(track) == null) {
+                consecutiveValidTimestamps = 0
+                dacTimestampsStable = false
+                val nowUs = nowNs() / 1000
+                if (nowUs - lastUsableTimestampAtUs <= TIMESTAMP_WAIT_MAX_US) lastUsableTimestampAtUs = nowUs
+            }
+            snapDropFrames = 0
+            postDryCushion = true
+        }
+        loopWasPlaying = state == PlaybackState.PLAYING
+
         // State machine for synchronized playback
-        when (playbackState) {
+        when (state) {
             PlaybackState.INITIALIZING -> {
                 // Write silence to keep DAC timestamps warm while waiting
                 // for first chunk.
@@ -1499,14 +1641,11 @@ class SyncAudioPlayer(
                 return STATE_POLL_DELAY_MS
             }
 
-            PlaybackState.WAITING_FOR_START -> {
-                // Check if we have enough buffer before starting
-                // Duration check alone is sufficient -- the old chunk count gate
-                // (MIN_CHUNKS_BEFORE_START=16) added unnecessary delay and is now
-                // replaced by DAC timestamp stability tracking in writeSilenceKeepAlive()
-                val bufferedMs = (totalQueuedSamples.get() * 1000) / sampleRate
-                if (bufferedMs < MIN_BUFFER_BEFORE_START_MS || handleStartGating()) {
-                    // Still waiting for buffer or for the scheduled start.
+            PlaybackState.WAITING_FOR_START, PlaybackState.REANCHORING -> {
+                // Start once the queue head is due, however much is queued: a
+                // head that is due and not started is only dropped as late.
+                if (handleStartGating()) {
+                    // Still waiting for the scheduled start.
                     // Keep the track fed with silence throughout: a track
                     // left to underrun stalls with its timestamps frozen,
                     // and a start aligned against those is off by however
@@ -1515,13 +1654,6 @@ class SyncAudioPlayer(
                     return STATE_POLL_DELAY_MS
                 }
                 // handleStartGating() transitioned us to PLAYING
-            }
-
-            PlaybackState.REANCHORING -> {
-                // Write silence to keep DAC timestamps warm while waiting
-                // for new chunks after reanchor
-                writeSilenceKeepAlive()
-                return STATE_POLL_DELAY_MS
             }
 
             PlaybackState.PLAYING -> {
@@ -1533,13 +1665,22 @@ class SyncAudioPlayer(
         if (chunkQueue.isEmpty()) {
             // Emptied by a clear, not run dry: the reset comes next
             if (resetRequested) return 0
-            // No chunks available - buffer underrun
-            bufferUnderrunCount++
-            // The track may stall now. Start the sync error estimate over
-            // and hold corrections until it has settled on fresh readings.
-            syncErrorFilter.reset()
-            playingStateEnteredAtUs = nowNs() / 1000
-            return BUFFER_EMPTY_DELAY_MS
+            // Nothing decoded to write, but the track is still playing what
+            // it holds: not an underrun, and the sync estimate stands. On a
+            // high-latency route the track itself holds little (pacing counts
+            // the latency below the mixer), so only nearly empty is dry.
+            val track = audioSink ?: return BUFFER_EMPTY_DELAY_MS
+            if (writtenAheadUs(track) >= DRY_AHEAD_US) return BUFFER_EMPTY_DELAY_MS
+            // The output is running dry. What arrives next goes through start
+            // gating ("recovery from underrun"): late audio is dropped and
+            // early audio waits, while the keepalive keeps the track running.
+            stateLock.withLock {
+                if (!resetRequested && chunkQueue.isEmpty() && playbackState == PlaybackState.PLAYING) {
+                    bufferUnderrunCount++
+                    setPlaybackState(PlaybackState.INITIALIZING)
+                }
+            }
+            return 0
         }
 
         // Pending-to-DAC pacing: only mechanism needed for write timing.
@@ -1565,23 +1706,27 @@ class SyncAudioPlayer(
                 "smoothed=${syncErrorFilter.offsetMicros}us, dropped=$framesDropped, inserted=$framesInserted")
         }
 
-        // Pause writing when the AudioTrack buffer is sufficiently full
-        if (pendingToDacUs > TARGET_PENDING_US + PENDING_TOL_US) {
+        // Pause writing when the AudioTrack buffer is sufficiently full. The
+        // depth counts the latency below the mixer: where that is more than
+        // the target, the track itself would starve, so it is kept fed to
+        // the cushion ahead of its playback head regardless.
+        if (pendingToDacUs > TARGET_PENDING_US + PENDING_TOL_US &&
+            audioSink.let { it == null || writtenAheadUs(it) > TRACK_CUSHION_US }
+        ) {
             return STATE_POLL_DELAY_MS
         }
 
-        // Reanchor if sync error is extremely large (e.g. after long pause/seek)
-        if (startTimeCalibrated && abs(syncErrorUs) > REANCHOR_THRESHOLD_US) {
-            PlayerLog.Sync.w("Large sync error: ${syncErrorUs/1000}ms, considering reanchor")
-            if (triggerReanchor()) {
-                return 0
-            }
+        // Reanchor once consecutive readings agree the error is too large to
+        // correct in place
+        if (largeErrorReadings >= REANCHOR_CONFIRM_READINGS && triggerReanchor()) {
+            return 0
         }
 
         // Take the head in one step. Nothing is taken once a clear has asked
-        // for a reset, so audio queued after it waits for start gating.
+        // for a reset, or once another thread has sent playback back to start
+        // gating since this iteration read the state: that audio waits for it.
         val chunk = stateLock.withLock {
-            if (resetRequested) null
+            if (resetRequested || playbackState != PlaybackState.PLAYING) null
             else chunkQueue.poll()?.also { totalQueuedSamples.addAndGet(-it.sampleCount.toLong()) }
         } ?: return 0
 
@@ -1763,10 +1908,13 @@ class SyncAudioPlayer(
         return totalWritten
     }
 
-    /** Write [frames] frames of silence, keeping the frame accounting in step. */
+    /**
+     * Write [frames] frames of silence, keeping the frame accounting in step.
+     * Stops early when a reset has been asked for: the track is flushed next.
+     */
     private fun writeSilence(track: AudioSink, frames: Long) {
         var remaining = frames * bytesPerFrame
-        while (remaining > 0) {
+        while (remaining > 0 && !resetRequested) {
             val written = track.write(silenceBuffer, 0, minOf(remaining, silenceBuffer.size.toLong()).toInt())
             if (written <= 0) return
             totalFramesWritten.addAndGet((written / bytesPerFrame).toLong())
@@ -1796,15 +1944,33 @@ class SyncAudioPlayer(
      * if late, or write silence of the same duration if early. This reading
      * must agree with the estimate from the readings before it, so a single
      * bad timestamp cannot trigger it.
+     *
+     * An error past [REANCHOR_THRESHOLD_US] is only counted here; the loop
+     * realigns the queue through start gating once readings confirm it.
      */
     private fun updateSyncError(track: AudioSink, chunk: AudioChunk) {
         if (playbackState != PlaybackState.PLAYING) return
+        // A reset filter (e.g. on a network change) maps nothing yet
+        if (!timeFilter.isReady) return
         val dacTimeUs = dacTimeOfNextWriteUs(track) ?: return
         val nowUs = nowNs() / 1000
+        lastUsableTimestampAtUs = nowUs
 
         val errorUs = timeFilter.clientToServer(dacTimeUs) - chunk.serverTimeMicros
         syncErrorUs = errorUs
         startTimeCalibrated = true
+        if (abs(errorUs) > REANCHOR_THRESHOLD_US) {
+            // Chunks written back to back can be measured against the same
+            // timestamp; a reading confirms another only from a newer one.
+            if (lastDacTimestampNs != largeErrorTimestampNs) {
+                largeErrorTimestampNs = lastDacTimestampNs
+                largeErrorReadings++
+            }
+            return
+        }
+        largeErrorReadings = 0
+        largeErrorTimestampNs = Long.MIN_VALUE
+        reanchorSettled = true
         val smoothedUs = syncErrorFilter.offsetMicros
         syncErrorFilter.update(errorUs, nowUs)
 
@@ -1842,8 +2008,9 @@ class SyncAudioPlayer(
         if (ts.framePosition <= 0) return null
         val tsUs = ts.nanoTime / 1000
         if (nowNs() / 1000 - tsUs > TIMESTAMP_MAX_AGE_US) return null
-        val pendingFrames = totalFramesWritten.get() - ts.framePosition
+        val pendingFrames = framesAhead(totalFramesWritten.get(), ts.framePosition)
         if (pendingFrames < 0 || pendingFrames > track.bufferSizeInBytes / bytesPerFrame + sampleRate) return null
+        lastDacTimestampNs = ts.nanoTime
         return tsUs + (pendingFrames * 1_000_000L) / sampleRate
     }
 
@@ -1854,7 +2021,7 @@ class SyncAudioPlayer(
     private fun getPendingToDacUs(track: AudioSink): Long {
         val ts = track.getTimestamp() ?: return 0L
         if (ts.framePosition <= 0) return 0L
-        val pendingFrames = (totalFramesWritten.get() - ts.framePosition).coerceAtLeast(0)
+        val pendingFrames = framesAhead(totalFramesWritten.get(), ts.framePosition).coerceAtLeast(0)
         return (pendingFrames * 1_000_000L) / sampleRate
     }
 
