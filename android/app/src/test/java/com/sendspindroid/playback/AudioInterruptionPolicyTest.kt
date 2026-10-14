@@ -253,4 +253,28 @@ class AudioInterruptionPolicyTest {
         for (mode in callModes) assertTrue("mode=$mode", AudioInterruptionPolicy.isCallMode(mode))
         assertFalse(AudioInterruptionPolicy.isCallMode(AudioManager.MODE_NORMAL))
     }
+
+    // ---- Taking the output back after a permanent loss ----
+
+    @Test
+    fun `playback takes the output while available`() {
+        assertTrue(AudioInterruptionPolicy.mayTakeFocus(userRequest = false, unavailable = false, playerRoleActive = true))
+    }
+
+    @Test
+    fun `a stream that crossed the unavailable report does not take the output back`() {
+        assertFalse(AudioInterruptionPolicy.mayTakeFocus(userRequest = false, unavailable = true, playerRoleActive = true))
+    }
+
+    @Test
+    fun `the user asking to play takes the output back`() {
+        assertTrue(AudioInterruptionPolicy.mayTakeFocus(userRequest = true, unavailable = true, playerRoleActive = true))
+    }
+
+    @Test
+    fun `nothing takes the output on a connection that is not a player`() {
+        for (user in listOf(false, true)) for (unavailable in listOf(false, true)) {
+            assertFalse(AudioInterruptionPolicy.mayTakeFocus(user, unavailable, playerRoleActive = false))
+        }
+    }
 }

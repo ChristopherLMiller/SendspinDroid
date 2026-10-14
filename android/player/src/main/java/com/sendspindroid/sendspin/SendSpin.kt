@@ -198,6 +198,9 @@ class SendSpin(
          */
         fun onAdmissionStateChanged(state: AdmissionState) {}
 
+        /** The server added or removed the player role; a removal has stopped the output. */
+        fun onPlayerRoleChanged(active: Boolean) {}
+
         /** Show this dynamic pairing code to the operator. */
         fun onDynamicPairingCodeEmitted(code: String) {}
 
@@ -554,6 +557,11 @@ class SendSpin(
      */
     private fun serverLabel(): String =
         serverName ?: sessionFacts?.serverId?.take(SERVER_ID_LABEL_LENGTH).orEmpty()
+
+    override fun onPlayerRoleChanged(active: Boolean) {
+        Log.i(TAG, "Player role ${if (active) "added" else "removed"}")
+        callback.onPlayerRoleChanged(active)
+    }
 
     override fun onAdmissionStateChanged(state: AdmissionState) {
         Log.i(TAG, "Admission state: $state")

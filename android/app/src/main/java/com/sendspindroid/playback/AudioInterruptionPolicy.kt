@@ -95,6 +95,24 @@ object AudioInterruptionPolicy {
     }
 
     /**
+     * Whether starting playback may take the audio focus.
+     *
+     * After a permanent focus loss this client reports `available: false`:
+     * another app owns the output and will not yield it. A stream/start or a
+     * 'playing' that crossed that report must not take it back from that app;
+     * the server ends the stream when the report arrives. Only the user asking
+     * this device to play does, which also makes it available again ("SHOULD
+     * return to `available: true` as soon as it is again willing to be taken
+     * over"). Nothing takes the focus on a connection that is not a player.
+     *
+     * @param userRequest the user asked this device to play
+     * @param unavailable the client reports `available: false` for a focus loss
+     * @param playerRoleActive the connection has the player role
+     */
+    fun mayTakeFocus(userRequest: Boolean, unavailable: Boolean, playerRoleActive: Boolean): Boolean =
+        playerRoleActive && (userRequest || !unavailable)
+
+    /**
      * True when a server playback-state change shows that our pause-for-a-call no
      * longer stands, so we must not resume when the call ends: someone stopped
      * playback, or playback left the paused state (it was resumed, even if it has

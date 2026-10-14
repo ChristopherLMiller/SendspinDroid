@@ -58,6 +58,9 @@ class SendSpinPlayer : Player {
 
     // External components (set after construction)
     private var sendSpinClient: SendSpin? = null
+
+    /** Run when the user asks to play, before the command goes to the server. */
+    var onPlayRequested: (() -> Unit)? = null
     private var syncAudioPlayer: SyncAudioPlayer? = null
 
     // Listener management - CopyOnWriteArrayList prevents ConcurrentModificationException
@@ -376,6 +379,7 @@ class SendSpinPlayer : Player {
         android.util.Log.i(TAG, "setPlayWhenReady: $playWhenReady, sendSpinClient=${sendSpinClient != null}")
         this.playWhenReady = playWhenReady
         if (playWhenReady) {
+            onPlayRequested?.invoke()
             sendSpinClient?.play()
         } else {
             sendSpinClient?.pause()

@@ -1222,6 +1222,16 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
+        override fun onPlayerRoleChanged(active: Boolean) {
+            if (active) return
+            mainHandler.post {
+                // No longer a player: nothing of ours will play on this connection
+                Log.i(TAG, "Player role removed - releasing the output and its locks")
+                engine.releasePlayer()
+                releasePlaybackLocks()
+            }
+        }
+
         @OptIn(UnstableApi::class)
         override fun onGroupUpdate(groupId: String, groupName: String, playbackState: String) {
             mainHandler.post {
@@ -1980,6 +1990,19 @@ class PlaybackService : MediaLibraryService() {
      */
     @Suppress("DEPRECATION")
     private fun acquirePlaybackLocks() {
+        val client = sendSpinClient
+        if (!AudioInterruptionPolicy.mayTakeFocus(
+                userRequest = false,
+                unavailable = client?.isExternalSourceActive == true,
+                playerRoleActive = client?.playerRoleActive == true,
+            )
+        ) {
+            // Nothing will play: what the server still sends is discarded
+            Log.i(FOCUS_TAG, "not taking the output: " +
+                if (client?.isExternalSourceActive == true) "another app owns it" else "not a player")
+            return
+        }
+
         // Request audio focus first - required for Android Auto to route audio to us
         requestAudioFocus()
 
@@ -2235,6 +2258,21 @@ class PlaybackService : MediaLibraryService() {
             sendSpinClient?.setExternalSource(false)
             setInterruptionMuted(false)
         }
+    }
+
+    /**
+     * The user asked this device to play. If another app took the output for
+     * good, take it back: that makes the client available again, before the
+     * play command reaches the server.
+     */
+    private fun onUserPlay() {
+        val client = sendSpinClient ?: return
+        if (!client.isExternalSourceActive) return
+        if (!AudioInterruptionPolicy.mayTakeFocus(
+                userRequest = true, unavailable = true, playerRoleActive = client.playerRoleActive)
+        ) return
+        Log.i(FOCUS_TAG, "play asked while another app owns the output - taking it back")
+        requestAudioFocus()
     }
 
     /**
@@ -3117,7 +3155,7 @@ class PlaybackService : MediaLibraryService() {
 
     @OptIn(UnstableApi::class)
     private fun initializePlayer() {
-        sendSpinPlayer = SendSpinPlayer()
+        sendSpinPlayer = SendSpinPlayer().apply { onPlayRequested = { onUserPlay() } }
         Log.d(TAG, "SendSpinPlayer initialized")
     }
 
