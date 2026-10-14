@@ -456,7 +456,7 @@ class SyncAudioPlayer(
     private var overlapTrimmedMs = 0L     // Total milliseconds of audio trimmed
 
     // Bytes per sample (e.g., 2 channels * 2 bytes = 4 bytes per sample frame)
-    private val bytesPerFrame = channels * (bitDepth / 8)
+    val bytesPerFrame = channels * (bitDepth / 8)
 
     // Pre-allocated silence buffer for the keepalive (10ms at sample rate).
     // Avoids allocating a new ByteArray on every iteration of the hot audio loop (~100 alloc/sec).
@@ -984,6 +984,13 @@ class SyncAudioPlayer(
             AppLog.Audio.d("Buffer cleared, state=$playbackState")
         }
     }
+
+    /**
+     * Whether [samples] more fit under the queue cap. The decoder waits on this
+     * so the cap never evicts: evicting drops the oldest chunks, the ones due next.
+     */
+    fun hasRoomFor(samples: Long): Boolean =
+        maxQueueSamples <= 0 || totalQueuedSamples.get() + samples <= maxQueueSamples
 
     /**
      * Evict oldest chunks from the queue if adding [newSamples] would exceed the

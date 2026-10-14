@@ -1235,17 +1235,23 @@ class PlaybackService : MediaLibraryService() {
      */
     private fun startDecodeWorker() {
         decodeJob = serviceScope.launch(decodeDispatcher) {
-            for (task in decodeChannel) {
-                try {
-                    when (task) {
-                        is DecodeTask.Chunk -> handleDecodeChunk(task)
-                        is DecodeTask.StartStream -> handleDecodeStartStream(task)
-                        DecodeTask.Flush -> handleDecodeFlush()
-                        DecodeTask.Release -> handleDecodeRelease()
+            try {
+                for (task in decodeChannel) {
+                    try {
+                        when (task) {
+                            is DecodeTask.Chunk -> handleDecodeChunk(task)
+                            is DecodeTask.StartStream -> handleDecodeStartStream(task)
+                            DecodeTask.Flush -> handleDecodeFlush()
+                            DecodeTask.Release -> handleDecodeRelease()
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Decode worker error on task ${task::class.simpleName}", e)
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Decode worker error on task ${task::class.simpleName}", e)
                 }
+            } finally {
+                // onDestroy's Release is lost when the channel is full, and a
+                // cancelled worker never reaches it. Release on the way out.
+                handleDecodeRelease()
             }
         }
     }
@@ -1285,6 +1291,14 @@ class PlaybackService : MediaLibraryService() {
         // Stamped by the decoder, not with this chunk's time: what comes out
         // can be the previous chunk's audio.
         for (audio in decoded) {
+            // The server may run minutes ahead (buffer_capacity counts encoded
+            // bytes), more than the capped decoded queue holds. Wait for room
+            // so the backlog stays encoded in decodeChannel; a stream/clear or
+            // stream/end bumps decodeGeneration and ends the wait.
+            val samples = (audio.pcm.size / player.bytesPerFrame).toLong()
+            while (t.generation == decodeGeneration && !player.hasRoomFor(samples)) {
+                delay(FORMAT_SWITCH_POLL_MS)
+            }
             player.queueChunk(audio.timestampUs, audio.pcm) { t.generation == decodeGeneration }
         }
     }
@@ -3709,7 +3723,9 @@ class PlaybackService : MediaLibraryService() {
         // don't want to block teardown waiting for the worker to make
         // progress; handleDecodeRelease still runs if trySend succeeds, or
         // the worker will release the decoder as it exits when the channel
-        // is closed.
+        // is closed. Bumping the generation first ends a wait for queue room
+        // and drops the backlog undecoded, so the worker can exit in time.
+        decodeGeneration++
         decodeChannel.trySend(DecodeTask.Release)
         decodeChannel.close()
         runBlocking {

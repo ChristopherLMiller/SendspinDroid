@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -565,4 +566,16 @@ class SyncAudioPlayerLoopTest {
     @Test
     fun `no chunk from before a clear is played after it and playback waits for new audio`() =
         stress(clearsLocked = true)
+
+    @Test
+    fun `a capped queue reports when it has no room so the decoder can wait instead of evicting`() {
+        val p = newPlayer(FakeAudioSink(), maxQueueSamples = chunkFrames * 3L)
+        repeat(3) { p.queueChunk(nowUs + 500_000L + it * 20_000L, pcm(it + 1)) }
+
+        assertFalse(p.hasRoomFor(chunkFrames.toLong()))
+
+        val uncapped = newPlayer(FakeAudioSink())
+        repeat(3) { uncapped.queueChunk(nowUs + 500_000L + it * 20_000L, pcm(it + 1)) }
+        assertTrue(uncapped.hasRoomFor(chunkFrames.toLong()))
+    }
 }
