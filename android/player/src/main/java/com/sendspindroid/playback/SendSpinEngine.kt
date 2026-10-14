@@ -260,6 +260,10 @@ class SendSpinEngine(
             // order with its chunks (switchOutputFormat).
             if (keepBuffered) return@launch
 
+            // A new stream: what a retired player still holds belongs to the
+            // last one, which can end without a stream/end (a server switch)
+            releaseRetiredPlayers()
+
             // Reuse existing player if format matches (DAC timestamps stay warm)
             val existingPlayer = player
             if (existingPlayer != null && existingPlayer.matchesFormat(sampleRate, channels, bitDepth)) {
@@ -470,7 +474,9 @@ class SendSpinEngine(
             if (retiredPlayers.remove(old)) {
                 Log.d(TAG, "Output in the previous format has played out - releasing it")
                 old.release()
-                announce(player)
+                // The next to play: another retired player, after a second
+                // change before this one's successor started
+                announce(retiredPlayers.firstOrNull() ?: player)
             }
         }
     }
@@ -632,7 +638,9 @@ class SendSpinEngine(
                 override fun onPlaybackStateChanged(state: SyncPlaybackState) {
                     scope.launch {
                         Log.d(TAG, "SyncAudioPlayer state changed: $state")
-                        if (state == SyncPlaybackState.PLAYING && player === created) announce(created)
+                        if (state == SyncPlaybackState.PLAYING && (player === created || created in retiredPlayers)) {
+                            announce(created)
+                        }
                         if (hostPlayer === created) listener.onPlayerStateChanged(state)
                     }
                 }

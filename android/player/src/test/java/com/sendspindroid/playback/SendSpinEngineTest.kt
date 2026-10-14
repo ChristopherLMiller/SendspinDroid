@@ -310,4 +310,43 @@ class SendSpinEngineTest {
         dispatcher.scheduler.runCurrent()
         verify(exactly = 1) { players[0].queueChunk(5_000L, any(), any()) }
     }
+
+    private fun playing(p: SyncAudioPlayer) {
+        val callback = slot<SyncAudioPlayerCallback>()
+        verify { p.setStateCallback(capture(callback)) }
+        callback.captured.onPlaybackStateChanged(PlaybackState.PLAYING)
+        dispatcher.scheduler.runCurrent()
+    }
+
+    @Test
+    fun `after two format changes the host follows the outputs in the order they play`() {
+        startStream()
+        changeFormat()                                        // 16 -> 24: players[1]
+        engine.onStreamStart("pcm", 48_000, 2, 32, null)      // 24 -> 32 before players[1] plays
+        dispatcher.scheduler.runCurrent()
+        assertEquals(3, players.size)
+
+        playing(players[1])  // the first output has run out, the second plays
+        assertEquals("player=1", events.last())
+
+        every { players[0].hasPlayedOut() } returns true
+        dispatcher.scheduler.advanceTimeBy(1_000)
+        dispatcher.scheduler.runCurrent()
+        assertEquals("the second output, still playing, stays the host", "player=1", events.last())
+
+        playing(players[2])
+        assertEquals("player=2", events.last())
+    }
+
+    @Test
+    fun `a new stream releases the outputs still playing out the last one`() {
+        startStream()
+        changeFormat()
+        engine.endStream()  // the connection changed with no stream/end
+        engine.onStreamStart("pcm", 48_000, 2, 24, null)
+        dispatcher.scheduler.runCurrent()
+
+        verify { players[0].release() }
+        assertEquals("player=1", events.last())
+    }
 }
