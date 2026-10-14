@@ -1797,10 +1797,10 @@ class MainActivity : AppCompatActivity() {
     private fun performExitApp() {
         Log.d(TAG, "Performing app exit")
 
-        // Disconnect from server if connected
+        // Disconnect, and stop waiting for a server, so the service can stop
         try {
             mediaController?.let { controller ->
-                val command = SessionCommand(PlaybackService.COMMAND_DISCONNECT, Bundle.EMPTY)
+                val command = SessionCommand(PlaybackService.COMMAND_EXIT, Bundle.EMPTY)
                 controller.sendCustomCommand(command, Bundle.EMPTY)
             }
         } catch (e: Exception) {
