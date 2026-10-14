@@ -53,7 +53,7 @@ class DynamicPairingCodeOptInTest {
         every { UserSettings.getUnpairedAccessEnabled() } returns true
         every { UserSettings.getDynamicPairingCodeEnabled() } returns false
 
-        client = SendSpin("TestDevice", mockk(relaxed = true))
+        client = SendSpin("TestDevice", mockk(relaxed = true), com.sendspindroid.AppSendSpinHost)
     }
 
     @After

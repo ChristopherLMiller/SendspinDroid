@@ -72,7 +72,7 @@ class SendSpinDisconnectTelemetryTest {
 
         mockCallback = mockk(relaxed = true)
 
-        client = SendSpin("TestDevice", mockCallback)
+        client = SendSpin("TestDevice", mockCallback, com.sendspindroid.AppSendSpinHost)
 
         // Seed connection info so the disconnect paths execute fully.
         setField("serverAddress", "127.0.0.1:8080")

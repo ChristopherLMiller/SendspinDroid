@@ -2,10 +2,8 @@ package com.sendspindroid.sendspin
 
 import android.os.Build
 import android.util.Log
-import com.sendspindroid.UserSettings
-import com.sendspindroid.logging.AppLog
+import com.sendspindroid.logging.PlayerLog
 import com.sendspindroid.sendspin.pairing.PairAbortReason
-import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.pairing.PairingOutcome
 import com.sendspindroid.sendspin.protocol.Activity
 import com.sendspindroid.sendspin.protocol.AdmissionState
@@ -17,7 +15,6 @@ import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import com.sendspindroid.sendspin.crypto.NoiseCipherSuite
 import com.sendspindroid.sendspin.crypto.asNoiseCrypto
 import com.sendspindroid.sendspin.crypto.NoiseHandshakeException
-import com.sendspindroid.sendspin.crypto.AndroidPairingConfigStore
 import com.sendspindroid.sendspin.crypto.Psk
 import com.sendspindroid.sendspin.crypto.PskCategory
 import com.sendspindroid.sendspin.crypto.TrustStore
@@ -82,7 +79,8 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class SendSpin(
     private val deviceName: String,
-    callback: Callback
+    callback: Callback,
+    private val host: SendSpinHost,
 ) : SendSpinProtocolHandler(TAG) {
 
     /**
@@ -282,7 +280,7 @@ class SendSpin(
         // and the applied compensation would both silently reset to 0 on every
         // launch, which is the failure the persistence requirement exists to
         // prevent.
-        setOutputDelayMs(UserSettings.getOutputDelayMs().toDouble())
+        setOutputDelayMs(host.outputDelayMs().toDouble())
     }
 
     // Stall watchdog state. lastByteReceivedAtMs is updated on EVERY text/binary
@@ -343,14 +341,14 @@ class SendSpin(
     private var handshakeDriver: SendSpinHandshakeDriver? = null
     private var handshakeTimeoutJob: Job? = null
 
-    /** Test seam for the handshake-phase timeout. */
-    internal var handshakeTimeoutMs = SendSpinProtocol.HANDSHAKE_TIMEOUT_MS
+    /** Test seam for the handshake-phase timeout. Public because the tests live in :app. */
+    var handshakeTimeoutMs = SendSpinProtocol.HANDSHAKE_TIMEOUT_MS
 
     private fun startEncryptedHandshake() {
         // The wire client_id for an encrypted session is the base64url public
         // key, NOT the legacy UUID player id - the two are different
         // identifiers and the server rejects a non-43-character value.
-        val identity = UserSettings.getOrCreateClientIdentity()
+        val identity = host.clientIdentity()
         val driver = SendSpinHandshakeDriver(
             identity = identity,
             candidates = pskCandidates(),
@@ -411,7 +409,7 @@ class SendSpin(
                 // psk_id match, because a match that then failed AEAD
                 // authenticated nothing.
                 if (event.matchedPsk.category == PskCategory.LONG_TERM) {
-                    UserSettings.getOrCreateTrustStore().markUsed(event.matchedPsk.pskId)
+                    host.trustStore().markUsed(event.matchedPsk.pskId)
                 }
                 // Nothing is sent yet: client/hello is the reply to the
                 // server/hello that arrives over this channel next.
@@ -444,7 +442,7 @@ class SendSpin(
     }
 
     /** Read once per connection; the PSK is process-wide and never rotates itself. */
-    private val pairingConfigStore = AndroidPairingConfigStore()
+    private val pairingConfigStore = host.pairingConfigStore()
 
     /**
      * The PSK that admitted the current session, or null before the handshake.
@@ -486,7 +484,7 @@ class SendSpin(
      */
     private fun pskCandidates(): PskCandidateSet = PskCandidateSet(
         PskCandidates.build(
-            records = UserSettings.getOrCreateTrustStore().listRecords(),
+            records = host.trustStore().listRecords(),
             config = pairingConfigStore.load(),
         )
     )
@@ -526,25 +524,25 @@ class SendSpin(
      */
     override fun currentServerId(): String? = sessionFacts?.serverId
 
-    override fun trustStore(): TrustStore = UserSettings.getOrCreateTrustStore()
+    override fun trustStore(): TrustStore = host.trustStore()
 
     override fun onPaired(serverId: String) {
         // The server drives the in-band re-handshake from here (#223); the
         // client sends nothing further. The new record is already visible to
         // pskCandidates(), which reads the store on every call.
         Log.i(TAG, "Pairing complete with $serverId - awaiting the server's re-handshake")
-        PairedServers.rememberName(serverId, serverLabel())
-        PairedServers.report(PairingOutcome.Paired(serverLabel()))
+        host.rememberServerName(serverId, serverLabel())
+        host.onPairingOutcome(PairingOutcome.Paired(serverLabel()))
     }
 
     override fun onPairingAborted(reason: String, sentByUs: Boolean) {
-        PairedServers.report(PairingOutcome.Aborted(reason, sentByUs, serverLabel()))
+        host.onPairingOutcome(PairingOutcome.Aborted(reason, sentByUs, serverLabel()))
     }
 
     /**
      * What to call the server when telling the user how a pairing ended.
      *
-     * Those outcomes go to [PairedServers] and not through [callback]: a
+     * Those outcomes go to [host] and not through [callback]: a
      * pairing changes what this device holds whichever connection it ran on,
      * including one that is not the connection being played from.
      */
@@ -573,8 +571,8 @@ class SendSpin(
 
     override fun onUnpaired(pskId: String, serverId: String?) {
         Log.i(TAG, "Unpaired by $serverId (psk_id=$pskId)")
-        serverId?.let { UserSettings.setPairedServerName(it, null) }
-        PairedServers.report(PairingOutcome.Unpaired(serverLabel()))
+        serverId?.let { host.forgetServerName(it) }
+        host.onPairingOutcome(PairingOutcome.Unpaired(serverLabel()))
         callback.onUnpaired(serverId)
     }
 
@@ -632,7 +630,7 @@ class SendSpin(
         // record persisted moments ago by a pairing must be visible to this
         // very selection, which is why the server started the exchange.
         val driver = RehandshakeDriver(
-            identity = UserSettings.getOrCreateClientIdentity(),
+            identity = host.clientIdentity(),
             candidates = pskCandidates(),
             serverId = facts.serverId,
             serverStaticKey = facts.serverStaticKey,
@@ -651,7 +649,7 @@ class SendSpin(
             facts.priorHandshakeHash = outcome.transport.handshakeHash
             matchedPsk = outcome.matched
             if (outcome.matched.category == PskCategory.LONG_TERM) {
-                UserSettings.getOrCreateTrustStore().markUsed(outcome.matched.pskId)
+                host.trustStore().markUsed(outcome.matched.pskId)
             }
             // The channel is promoted, not replaced: transport, streams, roles
             // and time filter all survive. "Neither server/hello nor
@@ -691,9 +689,9 @@ class SendSpin(
 
     /** Backs the Dynamic Pairing Code flow's brute-force counter (item 3.2's escalation gate). */
     private val dynamicPairingCounterStore = object : PairingCounterStore {
-        override fun load(): Int = UserSettings.getPairingCodeFailures()
+        override fun load(): Int = host.pairingCodeFailures()
         override fun save(value: Int) {
-            UserSettings.setPairingCodeFailures(value)
+            host.setPairingCodeFailures(value)
         }
     }
 
@@ -735,13 +733,15 @@ class SendSpin(
 
     override fun getTimeFilter(): SendspinTimeFilter = timeFilter
 
-    override fun isLowMemoryMode(): Boolean = UserSettings.lowMemoryMode
+    override fun isLowMemoryMode(): Boolean = host.lowMemoryMode
 
     override fun getDeviceName(): String = deviceName
 
     override fun getManufacturer(): String = Build.MANUFACTURER ?: "Unknown"
 
-    override fun getSoftwareVersion(): String = com.sendspindroid.BuildConfig.VERSION_NAME
+    override fun getSoftwareVersion(): String = host.softwareVersion
+
+    override fun persistOutputDelayMs(delayMs: Int) = host.setOutputDelayMs(delayMs)
 
     override fun getSupportedFormats(): List<MessageBuilder.FormatEntry> {
         val bitDepths = if (isLowMemoryMode()) {
@@ -750,7 +750,7 @@ class SendSpin(
             AudioDecoderFactory.getSupportedPcmBitDepths()
         }
         return MessageBuilder.buildSupportedFormats(
-            preferredCodec = UserSettings.getPreferredCodec(),
+            preferredCodec = host.preferredCodec(),
             isCodecSupported = { AudioDecoderFactory.isCodecSupported(it) },
             supportedBitDepths = bitDepths
         )
@@ -761,7 +761,7 @@ class SendSpin(
         // A pairing record holds no name, so a paired server's is noted here
         // for the list of paired servers.
         if (matchedPsk?.category == PskCategory.LONG_TERM && serverId.isNotEmpty()) {
-            PairedServers.rememberName(serverId, serverName)
+            host.rememberServerName(serverId, serverName)
         }
 
         evaluateAndPublishSyncState()
@@ -822,7 +822,7 @@ class SendSpin(
         // the stream was inactive (we were not expecting data then).
         lastByteReceivedAtMs.set(System.currentTimeMillis())
 
-        val preferredCodec = UserSettings.getPreferredCodec()
+        val preferredCodec = host.preferredCodec()
         Log.i(TAG, "Stream started: server chose codec=${config.codec} (we preferred=$preferredCodec)")
         callback.onStreamStart(
             config.codec,
@@ -1032,7 +1032,7 @@ class SendSpin(
      * High Power Mode uses 15s for faster drop detection, normal uses 30s.
      */
     private fun getPingIntervalSeconds(): Long =
-        if (UserSettings.highPowerMode) 15L else 30L
+        if (host.highPowerMode) 15L else 30L
 
     /**
      * Create and connect a local WebSocket transport.
@@ -1297,7 +1297,7 @@ class SendSpin(
      *     abnormal or pre-handshake.
      *   * Uptime is derived from [connectedAtMs] (null -> "preconnect" when
      *     handshake had not yet completed).
-     *   * Logs at INFO so `AppLog.level = WARN or above` suppresses emission
+     *   * Logs at INFO so `PlayerLog.level = WARN or above` suppresses emission
      *     without any formatting cost.
      */
     private fun recordDisconnectTelemetry(code: Int?, reasonText: String) {
@@ -1314,7 +1314,7 @@ class SendSpin(
         } else {
             "preconnect"
         }
-        AppLog.Network.i(
+        PlayerLog.Network.i(
             "[disconnect] code=$codeField reason=${reasonText.ifBlank { "unknown" }} " +
                 "uptime_s=$uptimeField"
         )

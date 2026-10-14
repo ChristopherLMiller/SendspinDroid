@@ -1,7 +1,6 @@
 package com.sendspindroid.sendspin.protocol
 
 import android.util.Log
-import com.sendspindroid.UserSettings
 import com.sendspindroid.sendspin.MinBufferEstimator
 import com.sendspindroid.sendspin.SendspinTimeFilter
 import com.sendspindroid.sendspin.crypto.NoiseCipherSuite
@@ -210,6 +209,9 @@ abstract class SendSpinProtocolHandler(
      * Called when audio chunk is received.
      */
     protected abstract fun onAudioChunk(timestampMicros: Long, audioData: ByteArray)
+
+    /** Store the output delay a server set, so it survives a restart. */
+    protected open fun persistOutputDelayMs(delayMs: Int) {}
 
     /**
      * Called when a channel's current image changes. An empty [payload] means
@@ -775,8 +777,8 @@ abstract class SendSpinProtocolHandler(
     fun installEncryptedTransport(transport: NoiseTransport) =
         installEncryptedChannel(transport.asNoiseCrypto())
 
-    /** [installEncryptedTransport], taking the codec's narrow view so tests can fake it. */
-    internal fun installEncryptedChannel(crypto: NoiseCrypto) {
+    /** [installEncryptedTransport], taking the codec's narrow view so tests can fake it. Public because the tests live in :app. */
+    fun installEncryptedChannel(crypto: NoiseCrypto) {
         wireCodec = NoiseWireCodec(crypto)
         rehandshakeInProgress = false
         // This is the sole call site for a FRESH handshake - a re-handshake
@@ -1919,7 +1921,7 @@ abstract class SendSpinProtocolHandler(
                 // sits on top of the hardware latency the client compensates
                 // itself. It must also survive a reboot.
                 getTimeFilter().setOutputDelayMs(result.delayMs.toDouble())
-                UserSettings.setOutputDelayMs(result.delayMs)
+                persistOutputDelayMs(result.delayMs)
                 sendPlayerStateUpdate()
             }
             is ServerCommandResult.Unknown -> {
