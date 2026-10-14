@@ -640,8 +640,9 @@ abstract class SendSpinProtocolHandler(
     fun resetSyncStateTracking() {
         val needsUnmute = synchronized(syncStateLock) {
             hasEverConverged = false
-            externalSourceActive = false
-            currentSyncState = "error"
+            // Another app holding the output is a fact about the device, not
+            // the connection: a new one still reports it
+            currentSyncState = if (externalSourceActive) "external_source" else "error"
             if (lastPublishedMute) {
                 lastPublishedMute = false
                 true

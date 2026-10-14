@@ -144,6 +144,19 @@ class SendSpinProtocolHandlerTest {
             .put(byteArrayOf(1, 2, 3, 4)).array()
 
     @Test
+    fun `a new connection keeps reporting the output another app holds`() {
+        handler.setExternalSource(true)
+        handler.resetSyncStateTrackingForTest()  // what a dial runs, reconnects included
+        val filter = handler.exposedTimeFilter()
+        for (i in 1..30) filter.addMeasurement(10_000L, 3000L, i * 1_000_000L)
+        handler.sentMessages.clear()
+        handler.evaluateAndPublishSyncStateForTest()
+
+        assertTrue(handler.isExternalSourceActive)
+        assertFalse(handler.exposedIsAvailable())
+    }
+
+    @Test
     fun `audio is discarded while another app owns the output`() {
         handler.handleTextMessageForTest(buildStreamStartJson(codec = "pcm", sampleRate = 48000, channels = 2, bitDepth = 16))
         handler.handleBinaryMessageForTest(audioFrame(1_000L))

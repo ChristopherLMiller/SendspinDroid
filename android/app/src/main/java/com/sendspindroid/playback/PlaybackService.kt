@@ -366,6 +366,10 @@ class PlaybackService : MediaLibraryService() {
     // Audio focus management - required for Android Auto to hand over audio output
     private var audioFocusRequest: AudioFocusRequest? = null
     private var hasAudioFocus: Boolean = false
+    // Another app took the output for good, and it has not been taken back:
+    // a fact about the device, which every client played from reports as
+    // available: false. Main thread.
+    private var otherAppHoldsOutput = false
 
     // What another app taking the output has done to us (main thread only).
     // See AudioInterruptionPolicy.
@@ -777,6 +781,7 @@ class PlaybackService : MediaLibraryService() {
         if (prevSendSpinState !is TransportState.Idle) onClientState(TransportState.Idle)
         sendSpinClient = client
         engine.client = client
+        client.setExternalSource(otherAppHoldsOutput)
         sendSpinPlayer?.setSendSpinClient(client)
         admissionState = AdmissionState.READY
         pairingCode = null
@@ -1993,13 +1998,13 @@ class PlaybackService : MediaLibraryService() {
         val client = sendSpinClient
         if (!AudioInterruptionPolicy.mayTakeFocus(
                 userRequest = false,
-                unavailable = client?.isExternalSourceActive == true,
+                unavailable = otherAppHoldsOutput,
                 playerRoleActive = client?.playerRoleActive == true,
             )
         ) {
             // Nothing will play: what the server still sends is discarded
             Log.i(FOCUS_TAG, "not taking the output: " +
-                if (client?.isExternalSourceActive == true) "another app owns it" else "not a player")
+                if (otherAppHoldsOutput) "another app owns it" else "not a player")
             return
         }
 
@@ -2255,6 +2260,7 @@ class PlaybackService : MediaLibraryService() {
         if (hasAudioFocus) {
             // We own the output again: clear any 'external_source' report
             // and any mute left by an interruption.
+            otherAppHoldsOutput = false
             sendSpinClient?.setExternalSource(false)
             setInterruptionMuted(false)
         }
@@ -2263,16 +2269,18 @@ class PlaybackService : MediaLibraryService() {
     /**
      * The user asked this device to play. If another app took the output for
      * good, take it back: that makes the client available again, before the
-     * play command reaches the server.
+     * play command reaches the server. False when it cannot be taken back
+     * (a phone call): nothing could play, so the command is not sent.
      */
-    private fun onUserPlay() {
-        val client = sendSpinClient ?: return
-        if (!client.isExternalSourceActive) return
+    private fun onUserPlay(): Boolean {
+        val client = sendSpinClient ?: return true
+        if (!otherAppHoldsOutput) return true
         if (!AudioInterruptionPolicy.mayTakeFocus(
                 userRequest = true, unavailable = true, playerRoleActive = client.playerRoleActive)
-        ) return
+        ) return true
         Log.i(FOCUS_TAG, "play asked while another app owns the output - taking it back")
         requestAudioFocus()
+        return !otherAppHoldsOutput
     }
 
     /**
@@ -2352,6 +2360,7 @@ class PlaybackService : MediaLibraryService() {
                 hasAudioFocus = false
                 pausedForCall = false
                 setInterruptionMuted(true)
+                otherAppHoldsOutput = true
                 sendSpinClient?.setExternalSource(true)
             }
             InterruptionAction.NONE -> {}
@@ -2362,9 +2371,8 @@ class PlaybackService : MediaLibraryService() {
         }
         // Focus was kept through the interruption (see abandonAudioFocus);
         // give it up now if nothing is playing.
-        if (event == AudioInterruption.FOCUS_GAIN &&
-            action != InterruptionAction.RESUME_ON_SERVER &&
-            serverState != PlaybackStateType.PLAYING
+        if (event == AudioInterruption.FOCUS_GAIN && AudioInterruptionPolicy.abandonFocusOnGain(
+                action, serverState, playerRoleActive = sendSpinClient?.playerRoleActive == true)
         ) {
             abandonAudioFocus()
         }

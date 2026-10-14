@@ -230,7 +230,7 @@ class SendSpinPlayerTest {
         val client = mockk<com.sendspindroid.sendspin.SendSpin>(relaxed = true)
         every { client.play() } answers { order += "command" }
         player.setSendSpinClient(client)
-        player.onPlayRequested = { order += "hook" }
+        player.onPlayRequested = { order += "hook"; true }
 
         player.play()
 
@@ -238,9 +238,21 @@ class SendSpinPlayerTest {
     }
 
     @Test
+    fun `play is not sent when nothing can play`() {
+        val client = mockk<com.sendspindroid.sendspin.SendSpin>(relaxed = true)
+        player.setSendSpinClient(client)
+        player.onPlayRequested = { false }
+
+        player.play()
+
+        verify(exactly = 0) { client.play() }
+        assertFalse(player.playWhenReady)
+    }
+
+    @Test
     fun `pause does not run the play hook`() {
         var ran = false
-        player.onPlayRequested = { ran = true }
+        player.onPlayRequested = { ran = true; true }
         player.pause()
         assertFalse(ran)
     }

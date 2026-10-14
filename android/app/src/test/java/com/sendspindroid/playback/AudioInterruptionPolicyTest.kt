@@ -272,6 +272,16 @@ class AudioInterruptionPolicyTest {
     }
 
     @Test
+    fun `the end of an interruption gives up the focus once the connection is not a player`() {
+        assertTrue(AudioInterruptionPolicy.abandonFocusOnGain(UNMUTE_LOCALLY, PlaybackStateType.PLAYING, playerRoleActive = false))
+        assertTrue(AudioInterruptionPolicy.abandonFocusOnGain(RESUME_ON_SERVER, PlaybackStateType.PAUSED, playerRoleActive = false))
+        // A player keeps it while it resumes or plays
+        assertFalse(AudioInterruptionPolicy.abandonFocusOnGain(UNMUTE_LOCALLY, PlaybackStateType.PLAYING, playerRoleActive = true))
+        assertFalse(AudioInterruptionPolicy.abandonFocusOnGain(RESUME_ON_SERVER, PlaybackStateType.PAUSED, playerRoleActive = true))
+        assertTrue(AudioInterruptionPolicy.abandonFocusOnGain(UNMUTE_LOCALLY, PlaybackStateType.STOPPED, playerRoleActive = true))
+    }
+
+    @Test
     fun `nothing takes the output on a connection that is not a player`() {
         for (user in listOf(false, true)) for (unavailable in listOf(false, true)) {
             assertFalse(AudioInterruptionPolicy.mayTakeFocus(user, unavailable, playerRoleActive = false))

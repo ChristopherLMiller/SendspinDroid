@@ -113,6 +113,16 @@ object AudioInterruptionPolicy {
         playerRoleActive && (userRequest || !unavailable)
 
     /**
+     * Whether the focus, kept through a transient loss, is given up once the
+     * interruption is over: unless we resume the group, or it is still
+     * playing here. A connection that is no longer a player has nothing of
+     * its own to play.
+     */
+    fun abandonFocusOnGain(action: InterruptionAction, serverState: PlaybackStateType, playerRoleActive: Boolean): Boolean =
+        !playerRoleActive ||
+            (action != InterruptionAction.RESUME_ON_SERVER && serverState != PlaybackStateType.PLAYING)
+
+    /**
      * True when a server playback-state change shows that our pause-for-a-call no
      * longer stands, so we must not resume when the call ends: someone stopped
      * playback, or playback left the paused state (it was resumed, even if it has
