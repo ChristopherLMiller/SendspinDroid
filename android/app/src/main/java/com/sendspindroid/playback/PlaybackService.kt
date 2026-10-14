@@ -240,6 +240,10 @@ class PlaybackService : MediaLibraryService() {
     @Volatile
     private var isDestroyed = false
 
+    // Set by COMMAND_EXIT: the service is on its way out and must not take
+    // the foreground again. Main thread only.
+    private var exiting = false
+
     // Guards against race condition: onAudioChunk runs on WebSocket thread but
     // decoder creation is posted to mainHandler. Chunks arriving before the new
     // decoder is ready would hit the old (released) decoder and throw.
@@ -455,6 +459,7 @@ class PlaybackService : MediaLibraryService() {
         // Custom session commands
         const val COMMAND_CONNECT = "com.sendspindroid.CONNECT"
         const val COMMAND_DISCONNECT = "com.sendspindroid.DISCONNECT"
+        const val COMMAND_EXIT = "com.sendspindroid.EXIT"
         const val COMMAND_SET_VOLUME = "com.sendspindroid.SET_VOLUME"
         const val COMMAND_NEXT = "com.sendspindroid.NEXT"
         const val COMMAND_PREVIOUS = "com.sendspindroid.PREVIOUS"
@@ -2220,6 +2225,13 @@ class PlaybackService : MediaLibraryService() {
      */
     @OptIn(UnstableApi::class)
     override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        // Media3 asks for the foreground while the player still reports
+        // playWhenReady, and for some time after, and starts the service to
+        // get it. On exit nothing may start it again (#327).
+        if (exiting) {
+            super.onUpdateNotification(session, false)
+            return
+        }
         // Waiting for a server to connect holds it too: the listener has to
         // stay reachable with the app in the background.
         val hold = isConnectedOrReconnecting() || connectionMode.isAdvertising
@@ -3083,6 +3095,7 @@ class PlaybackService : MediaLibraryService() {
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
                 .add(SessionCommand(COMMAND_CONNECT, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_DISCONNECT, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_EXIT, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_SET_VOLUME, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_NEXT, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_PREVIOUS, Bundle.EMPTY))
@@ -3142,6 +3155,20 @@ class PlaybackService : MediaLibraryService() {
                     coordinator.cancelReconnect()
                     setCurrentServer(null)
                     disconnectFromServer()
+                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                }
+
+                COMMAND_EXIT -> {
+                    // As DISCONNECT, and stop waiting for a server too. While
+                    // advertising, the disconnect completing would otherwise
+                    // put the service back in the foreground and start it
+                    // again, undoing the activity's stopService (#327).
+                    exiting = true
+                    coordinator.cancelReconnect()
+                    setCurrentServer(null)
+                    disconnectFromServer()
+                    connectionMode.stop()
+                    stopForegroundNotification()
                     Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
                 }
 
