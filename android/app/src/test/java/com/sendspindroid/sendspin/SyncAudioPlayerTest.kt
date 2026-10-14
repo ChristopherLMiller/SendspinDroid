@@ -364,12 +364,29 @@ class SyncAudioPlayerTest {
     }
 
     @Test
-    fun `REANCHORING to WAITING_FOR_START on new chunk`() {
+    fun `a chunk queued while realigning leaves the start to start gating`() {
         setField("playbackState", PlaybackState.REANCHORING)
 
         queueChunkDirect(2_000_000L, 960)
 
-        assertEquals(PlaybackState.WAITING_FOR_START, player.getPlaybackState())
+        assertEquals(PlaybackState.REANCHORING, player.getPlaybackState())
+        assertEquals(1, getChunkQueue().size)
+    }
+
+    @Test
+    fun `triggerReanchor keeps the queue and realigns it`() {
+        val method = SyncAudioPlayer::class.java.getDeclaredMethod("triggerReanchor")
+        method.isAccessible = true
+        queueChunkDirect(1_000_000L, 960)
+        queueChunkDirect(1_020_000L, 960)
+        setField("playbackState", PlaybackState.PLAYING)
+        setField("lastReanchorTimeUs", System.nanoTime() / 1000 - 6_000_000L)
+
+        assertTrue(method.invoke(player) as Boolean)
+
+        assertEquals(PlaybackState.REANCHORING, player.getPlaybackState())
+        assertEquals("the queue is kept", 2, getChunkQueue().size)
+        assertEquals(1_000_000L, getField<Long?>("firstServerTimestampUs"))
     }
 
     @Test
