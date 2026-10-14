@@ -738,6 +738,28 @@ class SendSpin(
 
     override fun getTimeFilter(): SendspinTimeFilter = timeFilter
 
+    /**
+     * Set the user's sync offset. The timing parameters reported depend on
+     * it, so the server hears about a change.
+     *
+     * @param overrideServer false to restore the saved setting without
+     *   ending a server's offset (see [SendspinTimeFilter.setUserSyncOffsetMs]).
+     */
+    fun setUserSyncOffsetMs(ms: Double, overrideServer: Boolean = true) {
+        timeFilter.setUserSyncOffsetMs(ms, overrideServer)
+        onSyncOffsetChanged()
+    }
+
+    /**
+     * Each connection starts from the persisted output_delay_ms ("Clients
+     * MUST persist output_delay_ms locally across reboots and server
+     * reconnections"): a server on another connection may have set it since
+     * this client was made.
+     */
+    private fun restorePersistedOutputDelay() {
+        timeFilter.setOutputDelayMs(host.outputDelayMs().toDouble())
+    }
+
     override fun isLowMemoryMode(): Boolean = host.lowMemoryMode
 
     override fun getDeviceName(): String = deviceName
@@ -955,9 +977,12 @@ class SendSpin(
         // The clock estimate belongs to the connection that measured it. It
         // is discarded here and not in the teardown, so that audio already
         // handed to the output finishes against the clock it was scheduled
-        // with.
+        // with. So is a server's sync offset: it was that server's
+        // correction.
         timeFilter.reset()
+        timeFilter.clearServerSyncOffset()
         resetSyncStateTracking()
+        restorePersistedOutputDelay()
 
         serverAddress = address
         serverPath = normalizedPath
@@ -987,7 +1012,9 @@ class SendSpin(
         _connectionState.value = TransportState.Connecting
 
         timeFilter.reset()
+        timeFilter.clearServerSyncOffset()
         resetSyncStateTracking()
+        restorePersistedOutputDelay()
 
         serverAddress = remoteAddress
         serverPath = null

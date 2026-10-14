@@ -4,6 +4,8 @@ import com.sendspindroid.sendspin.SendspinTimeFilter
 import com.sendspindroid.sendspin.crypto.PskCategory
 import com.sendspindroid.sendspin.protocol.message.MessageBuilder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -524,6 +526,69 @@ class SendSpinProtocolHandlerTest {
         assertTrue(handler.sentMessages.isEmpty())
     }
 
+    @Test
+    fun `a negative sync offset is added to both timing parameters`() {
+        activateRoles("\"${SendSpinProtocol.Roles.PLAYER}\"")
+        handler.filter.setUserSyncOffsetMs(-120.0)
+
+        handler.sentMessages.clear()
+        handler.setExternalSource(true)
+
+        val state = handler.sentMessages.last()
+        assertTrue(state, state.contains("\"required_lead_time_ms\":${SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_MS + 120},"))
+        assertTrue(state, state.contains("\"min_buffer_ms\":${SendSpinProtocol.PlayerTiming.MIN_BUFFER_MS + 120},"))
+        // Not output_delay_ms: the server applies that one itself
+        assertTrue(state, state.contains("\"output_delay_ms\":0,"))
+    }
+
+    @Test
+    fun `a positive sync offset changes neither timing parameter`() {
+        activateRoles("\"${SendSpinProtocol.Roles.PLAYER}\"")
+        handler.filter.setUserSyncOffsetMs(200.0)
+
+        handler.sentMessages.clear()
+        handler.setExternalSource(true)
+
+        val state = handler.sentMessages.last()
+        assertTrue(state, state.contains("\"required_lead_time_ms\":${SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_MS},"))
+        assertTrue(state, state.contains("\"min_buffer_ms\":${SendSpinProtocol.PlayerTiming.MIN_BUFFER_MS},"))
+    }
+
+    @Test
+    fun `a server's sync offset is reported in the timing parameters at once`() {
+        activateRoles("\"${SendSpinProtocol.Roles.PLAYER}\"")
+        handler.sentMessages.clear()
+
+        handler.handleTextMessageForTest(
+            """{"type":"client/sync_offset","payload":{"player_id":"p","offset_ms":-80,"source":"test"}}"""
+        )
+
+        val state = handler.sentMessages.last { it.contains("client/state") }
+        assertTrue(state, state.contains("\"min_buffer_ms\":${SendSpinProtocol.PlayerTiming.MIN_BUFFER_MS + 80},"))
+    }
+
+    @Test
+    fun `client state carries the state when it is sent, not when it was asked for`() {
+        // Sends wait for the test to run them, as they wait for another
+        // thread on a device.
+        val queued = TestProtocolHandler(StandardTestDispatcher())
+        queued.setHandshakeCompleteForTest()
+        queued.handleTextMessageForTest(
+            """{"type":"server/activate","payload":{"activities":["playback"],"active_roles":["${SendSpinProtocol.Roles.PLAYER}"]}}"""
+        )
+        queued.testScheduler.runCurrent()
+        queued.sentMessages.clear()
+
+        queued.setExternalSource(true)
+        // A change with no send of its own, made while that send is queued.
+        queued.filter.setUserSyncOffsetMs(-120.0)
+        queued.testScheduler.runCurrent()
+
+        val states = queued.sentMessages.filter { it.contains("client/state") }
+        assertEquals(1, states.size)
+        assertTrue(states[0], states[0].contains("\"required_lead_time_ms\":${SendSpinProtocol.PlayerTiming.REQUIRED_LEAD_TIME_MS + 120},"))
+    }
+
     // ========== Helpers ==========
 
     private fun buildServerStateJson(
@@ -582,16 +647,19 @@ class SendSpinProtocolHandlerTest {
  * Concrete test implementation of SendSpinProtocolHandler.
  * Records all callback invocations for assertion.
  */
-class TestProtocolHandler : SendSpinProtocolHandler("TestHandler") {
+class TestProtocolHandler(
+    // Unconfined by default, so a send the handler launches has reached
+    // sendBinaryFrame by the time the call that triggered it returns. A
+    // StandardTestDispatcher holds it until the test runs the scheduler.
+    private val testDispatcher: TestDispatcher = UnconfinedTestDispatcher(),
+) : SendSpinProtocolHandler("TestHandler") {
 
-    // Unconfined, so a send the handler launches has reached sendBinaryFrame
-    // by the time the call that triggered it returns.
-    private val testDispatcher = UnconfinedTestDispatcher()
     private val testScope = CoroutineScope(testDispatcher)
 
     /** Virtual time for whatever the handler has scheduled with `delay`. */
     val testScheduler get() = testDispatcher.scheduler
     private val timeFilter = SendspinTimeFilter()
+    val filter: SendspinTimeFilter get() = timeFilter
     val sentMessages = mutableListOf<String>()
     val metadataUpdates = mutableListOf<TrackMetadata>()
     val controllerStateUpdates = mutableListOf<ControllerState>()
