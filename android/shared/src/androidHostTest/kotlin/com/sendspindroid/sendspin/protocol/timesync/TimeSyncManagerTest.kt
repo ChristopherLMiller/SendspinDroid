@@ -500,4 +500,66 @@ class TimeSyncManagerTest {
         assertEquals(10_000L, timeFilter.offsetMicros)
         manager.stop()
     }
+
+    @Test
+    fun aSleepIsNoticedOnTheFrameThatEndsIt() = runTest {
+        manager.start(this)
+        advanceTimeBy(700)
+        readyFilter()
+        suspendedUs += 5_000_000L  // a server frame wakes the device
+
+        manager.checkForSleep()
+
+        assertFalse("the estimate from before the sleep must not translate this frame", timeFilter.isReady)
+        val sent = sendCount
+        advanceTimeBy(10)
+        assertTrue("sync starts over without waiting the interval", sendCount > sent)
+        manager.stop()
+    }
+
+    @Test
+    fun aReplyOutsideABurst_afterASleepFoundOnAFrame_isIgnored() = runTest {
+        manager.start(this)
+        advanceTimeBy(700)
+        suspendedUs += 5_000_000L
+        manager.checkForSleep()
+
+        // Its request went out before the sleep
+        assertFalse(manager.onServerTime(TimeMeasurement(offset = 5_010_000L, rtt = 4_000L, clientReceived = 3_000_000L)))
+        assertEquals(0, timeFilter.measurementCountValue)
+        manager.stop()
+    }
+
+    @Test
+    fun aSleep_burstsAtOnceUntilConverged() = runTest {
+        var trueOffsetUs = 10_000L
+        lateinit var answering: TimeSyncManager
+        answering = TimeSyncManager(
+            timeFilter = timeFilter,
+            sendClientTime = {
+                answering.onServerTime(
+                    TimeMeasurement(trueOffsetUs, 4_000L, testScheduler.currentTime * 1000 + 4_000)
+                )
+            },
+            suspendedTimeMicros = { suspendedUs },
+        )
+        answering.start(this)
+        advanceTimeBy(20_000)
+        assertTrue(timeFilter.isConverged)
+
+        suspendedUs += 5_000_000L
+        trueOffsetUs += 5_000_000L
+        answering.checkForSleep()
+        var convergedAfterMs = -1L
+        for (t in 1..6_000) {
+            advanceTimeBy(1)
+            if (timeFilter.isConverged) { convergedAfterMs = t.toLong(); break }
+        }
+        answering.stop()
+
+        // Five bursts back to back, about 350 ms each, rather than two and
+        // then the regular interval
+        assertTrue("converged again after $convergedAfterMs ms", convergedAfterMs in 1..2_000)
+        assertEquals(5_010_000L, timeFilter.offsetMicros)
+    }
 }

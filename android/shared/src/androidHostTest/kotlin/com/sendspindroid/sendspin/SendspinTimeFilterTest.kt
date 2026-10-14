@@ -355,6 +355,40 @@ class SendspinTimeFilterTest {
         assertEquals(0.0, filter.driftPpm, 0.01)
     }
 
+    // --- Where the port is shaped differently from the C++ ---
+
+    private fun offsetOf(f: SendspinTimeFilter): Double =
+        SendspinTimeFilter::class.java.getDeclaredField("offset").apply { isAccessible = true }.get(f) as Double
+
+    /** A 50 ms step as sample [n], after n - 1 samples at 0. Values from scratchpad gen_golden.py. */
+    private fun offsetAfterStepAt(n: Int): Double {
+        val f = SendspinTimeFilter()
+        for (i in 1 until n) f.addMeasurement(0L, 3000L, i * 1_000_000L)
+        f.addMeasurement(50_000L, 3000L, n * 1_000_000L)
+        return offsetOf(f)
+    }
+
+    @Test
+    fun forgetting_isNotAppliedToSample100() {
+        // C++: count_ < min_samples (100) only counts, so sample 100 cannot forget
+        assertEquals(1989.9092298842145, offsetAfterStepAt(100), 0.0)
+    }
+
+    @Test
+    fun forgetting_isAppliedFromSample101() {
+        assertEquals(7048.0259298426, offsetAfterStepAt(101), 0.0)
+    }
+
+    @Test
+    fun clientToServer_roundsHalfwayCasesAwayFromZero() {
+        val f = SendspinTimeFilter()
+        f.addMeasurement(0L, 2L, 1_000_000L)
+        f.addMeasurement(0L, 2L, 2_000_000L)
+        f.addMeasurement(-2L, 2L, 3_000_000L)  // offset exactly -1.5, drift not significant
+        assertEquals(-1.5, offsetOf(f), 0.0)
+        assertEquals("std::round(-1.5) is -2", 9_999_998L, f.clientToServer(10_000_000L))
+    }
+
     @Test
     fun drift_isNotBounded() {
         // Upstream has no drift cap: a 1000 ppm rate difference is tracked
@@ -434,9 +468,9 @@ class SendspinTimeFilterTest {
         for (i in 11..14) {
             filter.addMeasurement(500_000L, 3000L, i * 1_000_000L)
         }
-        // Filter should still produce a finite, reasonable error rather than
-        // an inflated value from premature forgetting.
-        assertTrue("Filter must remain numerically sane", filter.errorMicros.toLong() < 10_000_000L)
+        // Without forgetting the error is 785 us; premature forgetting
+        // leaves it at 1366 us
+        assertEquals(785L, filter.errorMicros)
     }
 
     // --- H-01: Thread safety ---

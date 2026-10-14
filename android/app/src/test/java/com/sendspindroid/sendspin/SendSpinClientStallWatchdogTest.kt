@@ -37,7 +37,7 @@ class SendSpinStallWatchdogTest : E2ETestBase() {
 
         fakeTransport.simulateRawTextFrame("""{"type":"server/init"}""")
 
-        assertTrue(client.getLastByteReceivedAgoMs() < 5_000)
+        assertTrue(client.getLastByteReceivedAgoMs() in 0L until 5_000L)
     }
 
     @Test
@@ -47,7 +47,32 @@ class SendSpinStallWatchdogTest : E2ETestBase() {
 
         fakeServer.sendGroupUpdate()
 
-        assertTrue(client.getLastByteReceivedAgoMs() < 5_000)
+        assertTrue(client.getLastByteReceivedAgoMs() in 0L until 5_000L)
+    }
+
+    // Each place that records a frame must use the clock checkStall reads:
+    // a wall-clock time there reads as far in the future and turns the
+    // watchdog off
+
+    @Test
+    fun `lastByteReceivedAtMs is reset on the clock checkStall reads when the watchdog starts`() {
+        injectTransportAndConnect()
+        fakeTransport.simulateConnected()
+        silentFor(10_000)
+
+        fakeServer.sendServerHello()  // starts the watchdog
+
+        assertTrue(client.getLastByteReceivedAgoMs() in 0L until 5_000L)
+    }
+
+    @Test
+    fun `lastByteReceivedAtMs is reset on the clock checkStall reads at stream start`() {
+        connectAndHandshake()
+        silentFor(10_000)
+
+        fakeServer.sendStreamStart()
+
+        assertTrue(client.getLastByteReceivedAgoMs() in 0L until 5_000L)
     }
 
     @Test

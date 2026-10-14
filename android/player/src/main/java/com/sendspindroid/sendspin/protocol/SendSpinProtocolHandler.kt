@@ -14,6 +14,7 @@ import com.sendspindroid.sendspin.protocol.message.BinaryMessageParser
 import com.sendspindroid.sendspin.protocol.message.MessageBuilder
 import com.sendspindroid.sendspin.protocol.message.MessageParser
 import com.sendspindroid.sendspin.protocol.timesync.TimeSyncManager
+import com.sendspindroid.shared.platform.Platform
 import kotlinx.coroutines.CoroutineScope
 import com.sendspindroid.sendspin.crypto.TrustStore
 import com.sendspindroid.sendspin.pairing.DynamicPairingAction
@@ -754,12 +755,16 @@ abstract class SendSpinProtocolHandler(
     /**
      * Initialize time sync manager.
      */
-    protected fun initTimeSyncManager(timeFilter: SendspinTimeFilter) {
+    protected fun initTimeSyncManager(
+        timeFilter: SendspinTimeFilter,
+        suspendedTimeMicros: () -> Long = Platform::suspendedTimeMicros,
+    ) {
         timeSyncManager = TimeSyncManager(
             timeFilter = timeFilter,
             sendClientTime = { sendClientTime() },
             onMeasurementApplied = { evaluateAndPublishSyncState() },
-            tag = tag
+            tag = tag,
+            suspendedTimeMicros = suspendedTimeMicros,
         )
     }
 
@@ -2080,6 +2085,8 @@ abstract class SendSpinProtocolHandler(
      */
     protected fun handleBinaryMessage(bytes: ByteArray) {
         frameReceivedAtMicros = System.nanoTime() / 1000
+        // Before anything in the frame is translated with the clock estimate
+        timeSyncManager?.checkForSleep()
         val codec = wireCodec
         if (codec == null) {
             // A binary frame before the Noise handshake completed. There is
