@@ -40,7 +40,8 @@ class AudioInterruptionPolicyTest {
         serverState: PlaybackStateType = PlaybackStateType.PLAYING,
         canSendPause: Boolean = true,
         pausedForCall: Boolean = false,
-    ) = AudioInterruptionPolicy.decide(event, audioMode, serverState, canSendPause, pausedForCall)
+        isTv: Boolean = false,
+    ) = AudioInterruptionPolicy.decide(event, audioMode, serverState, canSendPause, pausedForCall, isTv)
 
     // ---- A phone or VoIP call ----
 
@@ -204,6 +205,22 @@ class AudioInterruptionPolicyTest {
                 assertEquals("$state", NONE, decide(BECOMING_NOISY, serverState = state, canSendPause = canSend))
             }
         }
+    }
+
+    @Test
+    fun `becoming noisy on a TV does nothing`() {
+        // HDMI hotplug: the display waking or sleeping fires it, and a TV has
+        // no speaker of its own to protect (#325).
+        for (state in PlaybackStateType.values()) {
+            for (canSend in listOf(true, false)) {
+                assertEquals("$state", NONE, decide(BECOMING_NOISY, serverState = state, canSendPause = canSend, isTv = true))
+            }
+        }
+    }
+
+    @Test
+    fun `a TV still pauses for a call`() {
+        assertEquals(PAUSE_ON_SERVER, decide(FOCUS_LOSS_TRANSIENT, audioMode = AudioManager.MODE_IN_CALL, isTv = true))
     }
 
     @Test
