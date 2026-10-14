@@ -153,6 +153,11 @@ class SendSpinEngine(
     // thread reads or writes this field.
     private var audioDecoder: AudioDecoder? = null
 
+    // The stream the decoder was set up for, to set it up again after a
+    // decode error, and when that was last done. Decode worker only.
+    private var decoderStream: DecodeTask.StartStream? = null
+    private var lastDecoderSetUpAgainNs = 0L
+
     // Guards against race condition: onAudioChunk runs on WebSocket thread but
     // decoder creation is posted to the decode worker. Chunks arriving before
     // the new decoder is ready would hit the old (released) decoder and throw.
@@ -503,6 +508,9 @@ class SendSpinEngine(
             decoder.decode(t.audioData, t.serverTimeMicros)
         } catch (e: Exception) {
             Log.e(TAG, "Decode error, dropping chunk", e)
+            // A codec that has failed can stay in its error state, decoding
+            // nothing for the rest of the stream; a flush does not leave it
+            setUpDecoderAgain()
             return
         }
         val out = player ?: return
@@ -563,13 +571,21 @@ class SendSpinEngine(
             }
         }
 
-        // Release existing decoder and create new one for this stream.
+        setUpDecoder(t)
+
+        if (t.keepBuffered) switchOutputFormat(t)
+    }
+
+    /** Release the decoder and create one for [t]'s stream. Decode worker only. */
+    private fun setUpDecoder(t: DecodeTask.StartStream) {
         audioDecoder?.release()
         audioDecoder = null
+        decoderStream = null
         try {
             val decoder = AudioDecoderFactory.create(t.codec)
             decoder.configure(t.sampleRate, t.channels, t.bitDepth, t.codecHeader)
             audioDecoder = decoder
+            decoderStream = t
             Log.i(TAG, "Audio decoder created: ${t.codec}")
             decoderReady = true
         } catch (e: Exception) {
@@ -577,8 +593,20 @@ class SendSpinEngine(
             // Subsequent chunks are rejected at the WS-IO fast-path gate.
             decoderReady = false
         }
+    }
 
-        if (t.keepBuffered) switchOutputFormat(t)
+    /**
+     * After a decode error: a fresh decoder for the same stream, at most
+     * once a [DECODER_SET_UP_AGAIN_INTERVAL_NS], so data the codec cannot
+     * decode does not have it set up for every chunk. Decode worker only.
+     */
+    private fun setUpDecoderAgain() {
+        val stream = decoderStream ?: return
+        val now = System.nanoTime()
+        if (lastDecoderSetUpAgainNs != 0L && now - lastDecoderSetUpAgainNs < DECODER_SET_UP_AGAIN_INTERVAL_NS) return
+        lastDecoderSetUpAgainNs = now
+        Log.w(TAG, "Setting the ${stream.codec} decoder up again after a decode error")
+        setUpDecoder(stream)
     }
 
     /**
@@ -626,11 +654,15 @@ class SendSpinEngine(
             Log.e(TAG, "Cannot start audio: time filter not available")
             return
         }
-        // In low memory mode, cap the chunk queue to ~10 seconds of audio
-        val maxSamples = if (lowMemoryMode()) {
-            sampleRate.toLong() * SendSpinProtocol.Buffer.DURATION_LOW_MEM_SEC
+        // The decoded queue is capped; the decoder waits for room and keeps
+        // the rest encoded, which buffer_capacity bounds. That is
+        // DURATION_NORMAL_SEC at the highest PCM byte rate advertised, so
+        // twice it holds 16-bit PCM. Uncapped, an Opus backlog filling it
+        // would decode to 13-17 minutes (150-200 MB). Low memory mode: ~10 s.
+        val maxSamples = sampleRate.toLong() * if (lowMemoryMode()) {
+            SendSpinProtocol.Buffer.DURATION_LOW_MEM_SEC
         } else {
-            0L  // Unlimited
+            2 * SendSpinProtocol.Buffer.DURATION_NORMAL_SEC
         }
         val created = newPlayer(timeFilter, sampleRate, channels, bitDepth, maxSamples)
         created.apply {
@@ -667,5 +699,8 @@ class SendSpinEngine(
         // released this long after, once what it last wrote is through.
         const val RETIRED_POLL_MS = 50L
         const val RETIRED_TAIL_MS = 100L
+
+        // At most this often, a fresh decoder after a decode error
+        const val DECODER_SET_UP_AGAIN_INTERVAL_NS = 1_000_000_000L
     }
 }

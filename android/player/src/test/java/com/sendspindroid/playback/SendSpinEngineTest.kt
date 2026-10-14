@@ -31,6 +31,7 @@ class SendSpinEngineTest {
     private val dispatcher = StandardTestDispatcher()
     private val events = mutableListOf<String>()
     private val players = mutableListOf<SyncAudioPlayer>()
+    private val queueCaps = mutableListOf<Long>()
     private var playerMuted = false
 
     private lateinit var engine: SendSpinEngine
@@ -51,7 +52,8 @@ class SendSpinEngineTest {
             playerMuted = { playerMuted },
             mainDispatcher = dispatcher,
             decodeDispatcher = dispatcher,
-            newPlayer = { _, sampleRate, channels, bitDepth, _ ->
+            newPlayer = { _, sampleRate, channels, bitDepth, maxQueueSamples ->
+                queueCaps += maxQueueSamples
                 mockk<SyncAudioPlayer>(relaxed = true).also { p ->
                     every { p.matchesFormat(any(), any(), any()) } answers {
                         firstArg<Int>() == sampleRate && secondArg<Int>() == channels && thirdArg<Int>() == bitDepth
@@ -373,5 +375,46 @@ class SendSpinEngineTest {
 
         verify { players[0].release() }
         assertEquals("player=1", events.last())
+    }
+
+    @Test
+    fun `the decoded queue is capped in normal mode too`() {
+        startStream()
+
+        assertEquals(48_000L * 70, queueCaps.single())
+    }
+
+    @Test
+    fun `a decoder that fails is set up again for the same stream`() {
+        val failing = mockk<AudioDecoder>(relaxed = true) {
+            every { decode(any(), any()) } throws IllegalStateException("codec in error state")
+        }
+        val healthy = mockk<AudioDecoder>(relaxed = true) {
+            every { decode(any(), any()) } answers { listOf(DecodedAudio(secondArg(), ByteArray(16))) }
+        }
+        every { AudioDecoderFactory.create(any<String>()) } returnsMany listOf(failing, healthy)
+        startStream()
+
+        engine.onAudioChunk(1_000L, ByteArray(16))
+        engine.onAudioChunk(2_000L, ByteArray(16))
+        dispatcher.scheduler.advanceUntilIdle()
+
+        verify { failing.release() }
+        verify { healthy.configure(48_000, 2, 16, null) }
+        verify { players[0].queueChunk(2_000L, any(), any()) }
+    }
+
+    @Test
+    fun `a decoder that keeps failing is not set up again for every chunk`() {
+        val failing = mockk<AudioDecoder>(relaxed = true) {
+            every { decode(any(), any()) } throws IllegalStateException("codec in error state")
+        }
+        every { AudioDecoderFactory.create(any<String>()) } returns failing
+        startStream()
+
+        repeat(10) { engine.onAudioChunk(it * 20_000L, ByteArray(16)) }
+        dispatcher.scheduler.advanceUntilIdle()
+
+        verify(exactly = 2) { AudioDecoderFactory.create(any<String>()) }
     }
 }
