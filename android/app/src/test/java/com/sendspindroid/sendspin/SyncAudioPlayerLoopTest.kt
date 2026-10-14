@@ -120,12 +120,21 @@ class SyncAudioPlayerLoopTest {
         for (i in 0 until count) player.queueChunk(firstServerTimeUs + i * chunkUs, pcm(tag))
     }
 
-    // Simulated track: takes 10 ms of what it holds per tick and reports it
-    // through the playback head position. Its timestamps, when it gives any,
-    // are 20 ms behind that, the output latency below the mixer.
-    private val latencyFrames = 960L
+    // Simulated track: the mixer takes 10 ms of what it holds per tick and
+    // reports it through the playback head position. Below the mixer is a
+    // pipeline of latencyTicks ticks: the DAC presents what the head took
+    // that long ago, so a track that ran dry keeps presenting until its
+    // pipeline drains. Its timestamps, when it gives any, report that.
+    private var latencyTicks = 2
+    private val latencyUs: Long get() = latencyTicks * tickNs / 1000
     private var head = 0L
+    private val headHistory = ArrayDeque<Long>()  // head after each tick, newest last
     private var flushesSeen = 0
+
+    // A track whose presented position stops keeps returning the timestamp
+    // it last gave, as AudioTrack does when it stalls
+    private var freezeStalledTimestamps = false
+    private var lastTimestamp: SinkTimestamp? = null
 
     // As the last tick's loop iteration began: when a frame written then
     // would reach the DAC of the simulated track, and how many writes the
@@ -147,20 +156,28 @@ class SyncAudioPlayerLoopTest {
         if (sink.flushCallCount.get() != flushesSeen) {
             flushesSeen = sink.flushCallCount.get()
             head = 0
+            headHistory.clear()
+            lastTimestamp = null
         }
         head = minOf(framesInTrack(), head + sampleRate / 100)
         sink.scriptedPlaybackHeadPosition = head.toInt()
-        val dacPosition = head - latencyFrames
+        headHistory.addLast(head)
+        while (headHistory.size > latencyTicks + 1) headHistory.removeFirst()
+        val dacPosition = if (headHistory.size > latencyTicks) headHistory.first() else 0L
         val reportedPosition = if (wrapPositions) dacPosition and 0xFFFFFFFFL else dacPosition
-        val timestamp = if (timestamps && dacPosition > 0) {
-            SinkTimestamp(reportedPosition, now.get() + timestampShiftNs)
-        } else {
-            null
+        val stalled = lastTimestamp?.let { it.framePosition == reportedPosition } ?: false
+        val timestamp = when {
+            !timestamps || dacPosition <= 0 -> null
+            freezeStalledTimestamps && stalled -> lastTimestamp
+            else -> SinkTimestamp(reportedPosition, now.get() + timestampShiftNs)
         }
+        if (timestamp != null) lastTimestamp = timestamp
         sink.scriptTimestamp(timestamp)
-        // Without a timestamp the latency is unknown to the player, and to this.
-        val position = if (timestamp != null) dacPosition else head
-        dacTimeOfNextWriteUs = nowUs + (framesInTrack() - position) * 1_000_000L / sampleRate
+        // When a frame written now reaches the DAC: once the mixer has taken
+        // what is ahead of it, plus the pipeline. Without a timestamp the
+        // latency is unknown to the player, and to this.
+        dacTimeOfNextWriteUs = nowUs + (framesInTrack() - head) * 1_000_000L / sampleRate +
+            if (timestamp != null) latencyUs else 0L
         writesBeforeTick = sink.writes.size
         if (!burst) {
             step()
@@ -642,9 +659,11 @@ class SyncAudioPlayerLoopTest {
 
         assertEquals(1L, player.getStats().reanchorCount)
         assertEquals("the track's late audio is flushed", flushes + 1, sink.flushCallCount.get())
-        // About 800 ms, give or take what the flush and the restart take
+        // 38 chunks: about 26 for the step net of the audio flushed from the
+        // track, 2 for the ticks the restart takes, and 10 for the 200 ms of
+        // silence the keepalive writes after a flush
         val droppedNow = player.getStats().chunksDropped - dropped
-        assertTrue("$droppedNow chunks dropped for 800 ms", droppedNow in 30L..50L)
+        assertTrue("$droppedNow chunks dropped for 800 ms", droppedNow in 37L..39L)
         assertTrue("the rest of the queue is kept", queuedSamples() > 100L * chunkFrames)
         val errorUs = startErrorUs(firstServerTimeUs) + 800_000L
         assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
@@ -658,7 +677,10 @@ class SyncAudioPlayerLoopTest {
         // The track plays 60 ms more than usual, so the next iterations write
         // several chunks back to back, all measured against one timestamp
         // that is 600 ms off.
-        head = minOf(framesInTrack(), head + 2_880L)
+        val shifted = headHistory.map { minOf(framesInTrack(), it + 2_880L) }
+        headHistory.clear()
+        headHistory.addAll(shifted)
+        head = headHistory.last()
         val written = player.getStats().chunksPlayed
         tick(timestampShiftNs = 600_000_000L, burst = true)
         assertTrue("several chunks read the bad timestamp", player.getStats().chunksPlayed - written >= 2)
@@ -802,6 +824,101 @@ class SyncAudioPlayerLoopTest {
     }
 
     @Test
+    fun `on a high-latency output the track stays fed after it runs dry and restarts on time`() {
+        latencyTicks = 15  // 150 ms below the mixer, as on Bluetooth
+        freezeStalledTimestamps = true
+        queueStream(nowUs + 600_000L, count = 50, tag = 99)
+        tickUntilPlaying()
+        repeat(150) { tick() }
+        assertEquals(PlaybackState.INITIALIZING, player.getPlaybackState())
+        repeat(30) {
+            tick()
+            assertTrue("the track ran dry at the mixer", head < framesInTrack())
+        }
+        val dropped = player.getStats().chunksDropped
+
+        val firstServerTimeUs = nowUs + 300_000L
+        queueNumberedStream(firstServerTimeUs, count = 50)
+        tickUntilPlaying(maxTicks = 40)
+
+        assertEquals("nothing on time is dropped", dropped, player.getStats().chunksDropped)
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `on a high-latency output a late but in-time chunk is not an underrun`() {
+        // The track holds only what pacing leaves above the 150 ms below the
+        // mixer; chunks arrive 180 ms before they are due, after the loop
+        // would have written them, so the queue is often empty with the
+        // track running low but not dry.
+        latencyTicks = 15
+        var nextUs = nowUs + 800_000L
+        var leadUs = 800_000L  // a normal startup lead first
+        var tag = 1
+        fun feed() {
+            while (nextUs <= nowUs + leadUs) {
+                player.queueChunk(nextUs, pcm(tag++))
+                nextUs += chunkUs
+            }
+        }
+        repeat(300) {
+            if (player.getPlaybackState() != PlaybackState.PLAYING) {
+                feed()
+                tick()
+            }
+        }
+        assertEquals(PlaybackState.PLAYING, player.getPlaybackState())
+        leadUs = 180_000L
+        repeat(100) { feed(); tick() }  // what was queued ahead plays out
+        repeat(300) {
+            feed()
+            tick()
+            assertTrue("the track ran dry at the mixer", head < framesInTrack())
+        }
+
+        assertEquals(0L, player.getStats().bufferUnderrunCount)
+        assertEquals(PlaybackState.PLAYING, player.getPlaybackState())
+    }
+
+    @Test
+    fun `an output that never yields a timestamp restarts at once after running dry`() {
+        queueStream(nowUs + 300_000L, count = 20, tag = 99)
+        tickUntilPlaying(timestamps = false, maxTicks = 100)
+        repeat(100) { tick(timestamps = false) }
+        assertEquals(PlaybackState.INITIALIZING, player.getPlaybackState())
+        val dropped = player.getStats().chunksDropped
+
+        val firstServerTimeUs = nowUs + 120_000L
+        queueNumberedStream(firstServerTimeUs, count = 50)
+        tickUntilPlaying(timestamps = false, maxTicks = 5)
+
+        assertEquals("nothing on time is dropped", dropped, player.getStats().chunksDropped)
+        val errorUs = startErrorUs(firstServerTimeUs)
+        assertTrue("restart is off by ${errorUs}us", kotlin.math.abs(errorUs) <= oneFrameUs)
+    }
+
+    @Test
+    fun `a realignment that has not settled holds the next back for the cooldown`() {
+        steadyPlay(nowUs + 400_000L, count = 1000)
+        timeFilter.setUserSyncOffsetMs(-800.0)
+        tickUntilRealigning()
+        val realignedAtUs = nowUs
+        tickUntilPlaying(maxTicks = 20)
+        // Off again before any reading back in range
+        timeFilter.setUserSyncOffsetMs(0.0)
+
+        val played = player.getStats().chunksPlayed
+        while (nowUs - realignedAtUs < 4_900_000L) {
+            tick()
+            assertEquals(1L, player.getStats().reanchorCount)
+        }
+        assertTrue("playback went on meanwhile", player.getStats().chunksPlayed > played)
+        repeat(30) { tick() }
+        assertEquals("realigned once the cooldown was over", 2L, player.getStats().reanchorCount)
+    }
+
+    @Test
     fun `a gap never evicts queued audio from a capped queue`() {
         val p = newPlayer(FakeAudioSink(), maxQueueSamples = chunkFrames * 10L)
         val t = nowUs + 500_000L
@@ -830,10 +947,22 @@ class SyncAudioPlayerLoopTest {
         now.addAndGet(2_000_000_000L)
         val gaps = player.getStats().gapsFilled
 
-        player.queueChunk(startUs + 50 * chunkUs + 3_000_000L, pcm(2))
+        val postGapUs = startUs + 50 * chunkUs + 3_000_000L
+        player.queueChunk(postGapUs, pcm(2))
 
         assertEquals("no silence queued for a gap already passed", gaps, player.getStats().gapsFilled)
         assertEquals(PlaybackState.WAITING_FOR_START, player.getPlaybackState())
+
+        // The stale audio in front of the gap is dropped, and the chunk after
+        // it is waited for, not padded up to in one long write.
+        repeat(300) {
+            if (player.getPlaybackState() == PlaybackState.PLAYING) return@repeat
+            tick()
+            val silenceFrames = sink.writes.drop(writesBeforeTick)
+                .filter { tagOf(it.snapshotFirstBytes) == 0 }.sumOf { it.size } / bytesPerFrame
+            assertTrue("$silenceFrames frames of silence in one tick", silenceFrames <= 30L * sampleRate / 1000)
+        }
+        assertEquals(PlaybackState.PLAYING, player.getPlaybackState())
     }
 
     @Test
@@ -869,6 +998,10 @@ class SyncAudioPlayerLoopTest {
         val offset = (1L shl 32) - framesInTrack() - 5L * sampleRate / 100
         field<AtomicLong>(player, "totalFramesWritten").addAndGet(offset)
         head += offset
+        val shifted = headHistory.map { it + offset }
+        headHistory.clear()
+        headHistory.addAll(shifted)
+        lastTimestamp = null
         wrapPositions = true
         val played = player.getStats().chunksPlayed
 
