@@ -46,6 +46,7 @@ import com.sendspindroid.AppSendSpinHost
 import com.sendspindroid.MainActivity
 
 import com.sendspindroid.SyncOffsetPreference
+import com.sendspindroid.ui.adaptive.isTvDevice
 import com.sendspindroid.ui.settings.SettingsViewModel
 import com.sendspindroid.coordinator.ConnectionCoordinator
 import com.sendspindroid.coordinator.ConnectionMode
@@ -2271,7 +2272,9 @@ class PlaybackService : MediaLibraryService() {
         val audioMode = audioManager?.mode ?: AudioManager.MODE_NORMAL
         val serverState = _playbackState.value.playbackState
         val canSendPause = sendSpinClient?.let { it.isConnected && it.canSendCommand("pause") } == true
-        val action = AudioInterruptionPolicy.decide(event, audioMode, serverState, canSendPause, pausedForCall)
+        val action = AudioInterruptionPolicy.decide(
+            event, audioMode, serverState, canSendPause, pausedForCall, isTv = isTvDevice()
+        )
         Log.i(
             FOCUS_TAG,
             "$event mode=${AudioInterruptionPolicy.modeName(audioMode)} server=$serverState " +
