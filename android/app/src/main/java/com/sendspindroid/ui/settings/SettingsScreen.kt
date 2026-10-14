@@ -93,6 +93,7 @@ fun SettingsScreen(
     val fullscreenMode by viewModel.fullscreenMode.collectAsStateWithLifecycle()
     val keepScreenOn by viewModel.keepScreenOn.collectAsStateWithLifecycle()
     val layoutMode by viewModel.layoutMode.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val syncOffset by viewModel.syncOffset.collectAsStateWithLifecycle()
     val preferredCodec by viewModel.preferredCodec.collectAsStateWithLifecycle()
     val supportedCodecs by viewModel.supportedCodecs.collectAsStateWithLifecycle()
@@ -182,6 +183,17 @@ fun SettingsScreen(
                 ),
                 selectedOption = layoutMode,
                 onOptionSelected = { viewModel.setLayoutMode(it) }
+            )
+            SegmentedButtonPreference(
+                title = stringResource(R.string.pref_theme_mode_title),
+                summary = stringResource(R.string.pref_theme_mode_summary),
+                options = listOf(
+                    stringResource(R.string.pref_theme_mode_system) to UserSettings.ThemeMode.SYSTEM,
+                    stringResource(R.string.pref_theme_mode_light) to UserSettings.ThemeMode.LIGHT,
+                    stringResource(R.string.pref_theme_mode_dark) to UserSettings.ThemeMode.DARK
+                ),
+                selectedOption = themeMode,
+                onOptionSelected = { viewModel.setThemeMode(it) }
             )
 
             // Audio Category

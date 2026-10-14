@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
 import android.util.Log
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
@@ -102,6 +103,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _layoutMode = MutableStateFlow(UserSettings.layoutMode)
     val layoutMode: StateFlow<UserSettings.LayoutMode> = _layoutMode.asStateFlow()
 
+    private val _themeMode = MutableStateFlow(UserSettings.themeMode)
+    val themeMode: StateFlow<UserSettings.ThemeMode> = _themeMode.asStateFlow()
+
     // Audio settings
     private val _syncOffset = MutableStateFlow(UserSettings.getSyncOffsetMs())
     val syncOffset: StateFlow<Int> = _syncOffset.asStateFlow()
@@ -188,6 +192,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setLayoutMode(mode: UserSettings.LayoutMode) {
         UserSettings.layoutMode = mode
         _layoutMode.value = mode
+    }
+
+    fun setThemeMode(mode: UserSettings.ThemeMode) {
+        UserSettings.themeMode = mode
+        _themeMode.value = mode
+        // Recreates the running activities in the new theme.
+        AppCompatDelegate.setDefaultNightMode(mode.nightMode)
     }
 
     // Audio settings

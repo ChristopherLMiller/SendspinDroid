@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import android.util.Log
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.preference.PreferenceManager
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
@@ -60,6 +61,7 @@ object UserSettings {
     const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
     const val KEY_HIGH_POWER_MODE = "high_power_mode"
     const val KEY_LAYOUT_MODE = "layout_mode"
+    const val KEY_THEME_MODE = "theme_mode"
     const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
     const val KEY_SEARCH_FOR_SERVERS = "search_for_servers"
     const val KEY_LAST_PLAYBACK_SERVER_ID = "last_playback_server_id"
@@ -580,6 +582,22 @@ object UserSettings {
             }
         }
         set(value) { prefs?.edit()?.putString(KEY_LAYOUT_MODE, value.name)?.apply() }
+
+    /**
+     * Light/dark theme override. SYSTEM follows the device setting.
+     */
+    enum class ThemeMode(val nightMode: Int) {
+        SYSTEM(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM),
+        LIGHT(AppCompatDelegate.MODE_NIGHT_NO),
+        DARK(AppCompatDelegate.MODE_NIGHT_YES)
+    }
+
+    var themeMode: ThemeMode
+        get() {
+            val value = prefs?.getString(KEY_THEME_MODE, null)
+            return ThemeMode.entries.firstOrNull { it.name == value } ?: ThemeMode.SYSTEM
+        }
+        set(value) { prefs?.edit()?.putString(KEY_THEME_MODE, value.name)?.apply() }
 
     /**
      * Gets the preferred audio codec for streaming.

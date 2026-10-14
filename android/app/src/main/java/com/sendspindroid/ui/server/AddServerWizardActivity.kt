@@ -8,7 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.fragment.app.FragmentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -41,7 +41,7 @@ import java.io.IOException
  * Uses Jetpack Compose for UI via AddServerWizardScreen.
  * Handles lifecycle-aware operations like mDNS discovery and connection testing.
  */
-class AddServerWizardActivity : FragmentActivity() {
+class AddServerWizardActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "AddServerWizardActivity"
