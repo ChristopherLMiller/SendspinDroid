@@ -19,6 +19,8 @@ class FlacDecoder : MediaCodecDecoder(MediaFormat.MIMETYPE_AUDIO_FLAC) {
         private const val TAG = "FlacDecoder"
     }
 
+    private var sampleRate = 48_000
+
     override fun configureFormat(
         format: MediaFormat,
         sampleRate: Int,
@@ -26,6 +28,7 @@ class FlacDecoder : MediaCodecDecoder(MediaFormat.MIMETYPE_AUDIO_FLAC) {
         bitDepth: Int,
         codecHeader: ByteArray?
     ) {
+        this.sampleRate = sampleRate
         // FLAC requires the STREAMINFO metadata block as CSD-0
         // This 34-byte block contains:
         // - Minimum/maximum block size
@@ -41,5 +44,15 @@ class FlacDecoder : MediaCodecDecoder(MediaFormat.MIMETYPE_AUDIO_FLAC) {
             // if it can parse the STREAMINFO from the first frame
             Log.w(TAG, "No codec_header provided for FLAC - decoder may fail")
         }
+    }
+
+    /**
+     * A chunk can carry more than one frame, and the platform decoder takes
+     * one frame per input buffer: each goes in on its own, at its own time.
+     */
+    override fun decode(compressedData: ByteArray, timestampUs: Long): List<DecodedAudio> {
+        val frames = FlacFrames.split(compressedData, timestampUs, sampleRate)
+        if (frames.size == 1) return super.decode(compressedData, timestampUs)
+        return frames.flatMap { super.decode(it.data, it.timestampUs) }
     }
 }
