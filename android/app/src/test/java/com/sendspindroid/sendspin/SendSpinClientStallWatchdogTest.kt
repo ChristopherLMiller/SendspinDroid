@@ -21,7 +21,7 @@ class SendSpinStallWatchdogTest : E2ETestBase() {
 
     private fun lastByte(): AtomicLong = getField(client, "lastByteReceivedAtMs")
 
-    private fun silentFor(ms: Long) = lastByte().set(System.currentTimeMillis() - ms)
+    private fun silentFor(ms: Long) = lastByte().set(System.nanoTime() / 1_000_000 - ms)
 
     private fun checkStall() {
         val m = SendSpin::class.java.getDeclaredMethod("checkStall")

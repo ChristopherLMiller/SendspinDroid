@@ -290,39 +290,44 @@ class SendspinTimeFilterTest {
         assertEquals(10.5, filter.staticDelayMs, 0.01)
     }
 
-    // --- Outlier rejection ---
+    // --- Samples the reference skips ---
 
     @Test
-    fun addMeasurement_outlier_isRejected() {
-        // Build history with consistent measurements
+    fun addMeasurement_nonPositiveMaxError_isSkipped() {
+        filter.addMeasurement(10_000L, 3000L, 1_000_000L)
+        filter.addMeasurement(10_000L, 3000L, 2_000_000L)
+        val offsetBefore = filter.offsetMicros
+        val errorBefore = filter.errorMicros
+
+        assertFalse(filter.addMeasurement(900_000L, 0L, 3_000_000L))
+        assertFalse(filter.addMeasurement(900_000L, -5L, 4_000_000L))
+
+        assertEquals(offsetBefore, filter.offsetMicros)
+        assertEquals(errorBefore, filter.errorMicros)
+        assertEquals(2, filter.measurementCountValue)
+        // Nor does it move the time of the last update
+        assertTrue(filter.addMeasurement(10_000L, 3000L, 2_500_000L))
+    }
+
+    @Test
+    fun addMeasurement_notLaterThanTheLast_isSkipped() {
+        filter.addMeasurement(10_000L, 3000L, 2_000_000L)
+        assertFalse(filter.addMeasurement(10_000L, 3000L, 2_000_000L))
+        assertFalse(filter.addMeasurement(10_000L, 3000L, 1_000_000L))
+        assertEquals(1, filter.measurementCountValue)
+    }
+
+    @Test
+    fun addMeasurement_anOutlierIsWeighedNotRejected() {
+        // Upstream has no outlier gate: a wild sample goes into the update,
+        // weighed by its own max_error
         for (i in 1..10) {
             filter.addMeasurement(10_000L, 5000L, i * 1_000_000L)
         }
         val offsetBefore = filter.offsetMicros
 
-        // Send a wild outlier
-        val accepted = filter.addMeasurement(1_000_000L, 5000L, 11_000_000L)
-
-        assertFalse("Outlier should be rejected", accepted)
-        // Offset should not have changed significantly
-        assertEquals(offsetBefore, filter.offsetMicros)
-    }
-
-    @Test
-    fun addMeasurement_forceAcceptAfterThreeRejections() {
-        // Build history
-        for (i in 1..10) {
-            filter.addMeasurement(10_000L, 5000L, i * 1_000_000L)
-        }
-
-        // Send 3 outliers (rejected), then 4th should be force-accepted
-        val outlierOffset = 500_000L
-        filter.addMeasurement(outlierOffset, 5000L, 11_000_000L)
-        filter.addMeasurement(outlierOffset, 5000L, 12_000_000L)
-        filter.addMeasurement(outlierOffset, 5000L, 13_000_000L)
-        val accepted = filter.addMeasurement(outlierOffset, 5000L, 14_000_000L)
-
-        assertTrue("4th consecutive outlier should be force-accepted", accepted)
+        assertTrue(filter.addMeasurement(1_000_000L, 5000L, 11_000_000L))
+        assertTrue(filter.offsetMicros > offsetBefore)
     }
 
     // --- Reset ---
@@ -351,19 +356,12 @@ class SendspinTimeFilterTest {
     }
 
     @Test
-    fun drift_isBoundedToMaxDrift() {
-        // Feed measurements with extreme increasing offset to push drift
-        filter.addMeasurement(0L, 5000L, 1_000_000L)
-        filter.addMeasurement(0L, 5000L, 2_000_000L)
-        for (i in 3..30) {
-            // Each measurement is 1 second worth of drift at extreme rate
-            filter.addMeasurement((i * 100_000).toLong(), 5000L, i * 1_000_000L)
+    fun drift_isNotBounded() {
+        // Upstream has no drift cap: a 1000 ppm rate difference is tracked
+        for (i in 1..30) {
+            filter.addMeasurement(i * 1_000L, 500L, i * 1_000_000L)
         }
-        // MAX_DRIFT is 5e-4, which is 500 ppm
-        assertTrue(
-            "Drift should be bounded to 500 ppm, was ${filter.driftPpm}",
-            kotlin.math.abs(filter.driftPpm) <= 500.0 + 1.0
-        )
+        assertEquals(1000.0, filter.driftPpm, 10.0)
     }
 
     // --- Error decreases with measurements ---
@@ -399,10 +397,9 @@ class SendspinTimeFilterTest {
     @Test
     fun stepChange_afterConvergence_recoversViaForgetting() {
         // Drive the filter through MIN_SAMPLES_FOR_FORGETTING (=100) at offset=0,
-        // then introduce a sustained 50ms step change. The filter must adopt
-        // the new offset given enough measurements; the IQR pre-rejection plus
-        // force-accept-after-3 mechanism gates the rate at which the step
-        // reaches the Kalman update, so allow a generous recovery window.
+        // then introduce a sustained 50ms step change. Forgetting inflates the
+        // covariance while the residual is large, so the step is adopted
+        // quickly; the drift it picks up on the way overshoots for a while.
         for (i in 1..100) {
             filter.addMeasurement(0L, 3000L, i * 1_000_000L)
         }
@@ -432,10 +429,8 @@ class SendspinTimeFilterTest {
         for (i in 1..10) {
             filter.addMeasurement(10_000L, 3000L, i * 1_000_000L)
         }
-        // Drive a single outlier through the IQR pre-rejection by exhausting
-        // the rejected-count force-accept path: 3 IQR-rejected outliers, then
-        // the 4th is force-accepted into the Kalman update. Since count is
-        // still well under MIN_SAMPLES_FOR_FORGETTING, forgetting must stay off.
+        // Count is still well under MIN_SAMPLES_FOR_FORGETTING, so forgetting
+        // must stay off for these.
         for (i in 11..14) {
             filter.addMeasurement(500_000L, 3000L, i * 1_000_000L)
         }
