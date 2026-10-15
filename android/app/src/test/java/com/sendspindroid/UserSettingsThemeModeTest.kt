@@ -54,8 +54,15 @@ class UserSettingsThemeModeTest {
 
     @Test
     fun `each theme maps to its AppCompat night mode`() {
-        assertEquals(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM, UserSettings.ThemeMode.SYSTEM.nightMode)
-        assertEquals(AppCompatDelegate.MODE_NIGHT_NO, UserSettings.ThemeMode.LIGHT.nightMode)
-        assertEquals(AppCompatDelegate.MODE_NIGHT_YES, UserSettings.ThemeMode.DARK.nightMode)
+        assertEquals(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM, UserSettings.ThemeMode.SYSTEM.nightMode(isTv = false))
+        assertEquals(AppCompatDelegate.MODE_NIGHT_NO, UserSettings.ThemeMode.LIGHT.nightMode(isTv = false))
+        assertEquals(AppCompatDelegate.MODE_NIGHT_YES, UserSettings.ThemeMode.DARK.nightMode(isTv = false))
+    }
+
+    @Test
+    fun `on a TV the system theme is dark and a chosen theme is kept`() {
+        assertEquals(AppCompatDelegate.MODE_NIGHT_YES, UserSettings.ThemeMode.SYSTEM.nightMode(isTv = true))
+        assertEquals(AppCompatDelegate.MODE_NIGHT_NO, UserSettings.ThemeMode.LIGHT.nightMode(isTv = true))
+        assertEquals(AppCompatDelegate.MODE_NIGHT_YES, UserSettings.ThemeMode.DARK.nightMode(isTv = true))
     }
 }

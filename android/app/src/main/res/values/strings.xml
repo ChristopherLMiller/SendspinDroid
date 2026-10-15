@@ -32,6 +32,8 @@
     <string name="action_edit_server">Edit Server</string>
     <string name="action_app_settings">App Settings</string>
     <string name="action_exit_app">Exit App</string>
+    <!-- TV side menu: the entry for the server list -->
+    <string name="tv_menu_servers">Servers</string>
 
     <!-- Success messages -->
     <string name="server_added">Server added: %s</string>

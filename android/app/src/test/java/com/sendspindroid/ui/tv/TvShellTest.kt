@@ -1,0 +1,134 @@
+package com.sendspindroid.ui.tv
+
+import androidx.activity.ComponentActivity
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
+import com.sendspindroid.ui.adaptive.TvOverscanHorizontal
+import com.sendspindroid.ui.theme.SendSpinTheme
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * The TV side menu is driven by a remote alone: Left from the screen, Back or
+ * Menu opens it on the screen's own entry, Right and its entries return to the
+ * screen, and Back in it leaves.
+ */
+@OptIn(ExperimentalTestApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class TvShellTest {
+
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule<ComponentActivity>()
+
+    private var left = 0
+    private var stats = 0
+
+    private fun showShell() {
+        composeTestRule.setContent {
+            SendSpinTheme {
+                TvShell(
+                    home = TvMenuEntry("Now Playing", Icons.Default.PlayArrow),
+                    entries = listOf(TvMenuEntry("Stats", Icons.Default.Info) { stats++ }),
+                    footerEntries = listOf(TvMenuEntry("Settings", Icons.Default.Settings)),
+                    onLeave = { left++ }
+                ) {
+                    // Screens keep the TV side margin themselves
+                    Row(modifier = Modifier.padding(horizontal = TvOverscanHorizontal)) {
+                        Button(onClick = {}) { Text("Previous") }
+                        Button(onClick = {}) { Text("Play") }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun pressBack() {
+        composeTestRule.runOnUiThread { composeTestRule.activity.onBackPressedDispatcher.onBackPressed() }
+        composeTestRule.waitForIdle()
+    }
+
+    @Test
+    fun `left from the screen opens the menu on its own entry`() {
+        showShell()
+        composeTestRule.onNodeWithText("Previous").requestFocus()
+
+        composeTestRule.onNodeWithText("Previous").performKeyInput { pressKey(Key.DirectionLeft) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+    }
+
+    @Test
+    fun `right from the menu returns to what had focus on the screen`() {
+        showShell()
+        composeTestRule.onNodeWithText("Play").requestFocus()
+        pressBack()
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+
+        composeTestRule.onNodeWithText("Now Playing").performKeyInput { pressKey(Key.DirectionRight) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Play").assertIsFocused()
+    }
+
+    @Test
+    fun `back opens the menu and back in the menu leaves`() {
+        showShell()
+        composeTestRule.onNodeWithText("Play").requestFocus()
+
+        pressBack()
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+        assertEquals(0, left)
+
+        pressBack()
+        assertEquals(1, left)
+        composeTestRule.onNodeWithText("Play").assertIsFocused()
+    }
+
+    @Test
+    fun `menu key opens the menu`() {
+        showShell()
+        composeTestRule.onNodeWithText("Play").requestFocus()
+
+        composeTestRule.onNodeWithText("Play").performKeyInput { pressKey(Key.Menu) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+    }
+
+    @Test
+    fun `an entry closes the menu before it acts`() {
+        showShell()
+        composeTestRule.onNodeWithText("Play").requestFocus()
+        pressBack()
+
+        composeTestRule.onNodeWithText("Now Playing").performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Stats").assertIsFocused()
+        composeTestRule.onNodeWithText("Stats").performKeyInput { pressKey(Key.DirectionCenter) }
+        composeTestRule.waitForIdle()
+
+        assertEquals(1, stats)
+        composeTestRule.onNodeWithText("Play").assertIsFocused()
+    }
+}

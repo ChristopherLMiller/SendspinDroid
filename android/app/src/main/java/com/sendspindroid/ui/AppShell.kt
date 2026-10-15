@@ -8,6 +8,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Surface
+import com.sendspindroid.ui.tv.TvMenuEntry
+import com.sendspindroid.ui.tv.TvShell
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
@@ -62,6 +73,8 @@ import com.sendspindroid.ui.adaptive.FormFactor
  * @param onAllowPairingClick Confirm the dynamic pairing gesture gate
  * @param onDisconnectClick Disconnect from server
  * @param onAddServerClick FAB: launch add server wizard
+ * @param canEditServer Whether the connection is to a saved server, which Edit Server opens
+ * @param onLeaveApp TV: Back pressed in the side menu, to leave the app
  */
 @Composable
 fun AppShell(
@@ -80,9 +93,41 @@ fun AppShell(
     onSettingsClick: () -> Unit,
     onEditServerClick: () -> Unit,
     onExitAppClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    canEditServer: Boolean = true,
+    onLeaveApp: () -> Unit = {},
 ) {
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+
+    if (LocalFormFactor.current == FormFactor.TV) {
+        TvAppShell(
+            viewModel = viewModel,
+            serverListContent = serverListContent,
+            nowPlaying = {
+                NowPlayingScreen(
+                    viewModel = viewModel,
+                    onPreviousClick = onPreviousClick,
+                    onPlayPauseClick = onPlayPauseClick,
+                    onNextClick = onNextClick,
+                    onSwitchGroupClick = onSwitchGroupClick,
+                    onVolumeChange = onVolumeChange,
+                    onSeek = onSeek,
+                    onOpenPairingClick = onSettingsClick,
+                    onAllowPairingClick = onAllowPairingClick,
+                    modifier = Modifier.fillMaxSize()
+                )
+            },
+            onDisconnectClick = onDisconnectClick,
+            onAddServerClick = onAddServerClick,
+            onStatsClick = onStatsClick,
+            onSettingsClick = onSettingsClick,
+            onEditServerClick = onEditServerClick.takeIf { canEditServer },
+            onExitAppClick = onExitAppClick,
+            onLeaveApp = onLeaveApp,
+            modifier = modifier
+        )
+        return
+    }
 
     when (connectionState) {
         is AppConnectionState.ServerList,
@@ -321,4 +366,115 @@ private fun ConnectedShell(
         topBar = topBar,
         content = contentArea
     )
+}
+
+/**
+ * The TV frame: the side menu of [TvShell] in place of the top bar, the
+ * overflow menu and the corner buttons, around the server list or Now Playing.
+ *
+ * The connection status the phone shows in its top bar is at the top of the
+ * menu: a dot while it is collapsed, the server's name with it when open.
+ *
+ * @param onEditServerClick Null when the connection is not to a saved server.
+ */
+@Composable
+private fun TvAppShell(
+    viewModel: MainActivityViewModel,
+    serverListContent: @Composable () -> Unit,
+    nowPlaying: @Composable () -> Unit,
+    onDisconnectClick: () -> Unit,
+    onAddServerClick: () -> Unit,
+    onStatsClick: () -> Unit,
+    onSettingsClick: () -> Unit,
+    onEditServerClick: (() -> Unit)?,
+    onExitAppClick: () -> Unit,
+    onLeaveApp: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val connected = when (connectionState) {
+        is AppConnectionState.ServerList, is AppConnectionState.Error -> false
+        is AppConnectionState.Connecting,
+        is AppConnectionState.Connected,
+        is AppConnectionState.Reconnecting -> true
+    }
+
+    val settings = TvMenuEntry(stringResource(R.string.action_app_settings), Icons.Default.Settings, onSettingsClick)
+    val exit = TvMenuEntry(stringResource(R.string.action_exit_app), Icons.AutoMirrored.Filled.ExitToApp, onExitAppClick)
+    val home: TvMenuEntry
+    val entries: List<TvMenuEntry>
+    if (connected) {
+        home = TvMenuEntry(stringResource(R.string.now_playing), Icons.Default.PlayArrow)
+        entries = listOfNotNull(
+            TvMenuEntry(stringResource(R.string.action_switch_server), Icons.AutoMirrored.Filled.List, onDisconnectClick),
+            onEditServerClick?.let { TvMenuEntry(stringResource(R.string.action_edit_server), Icons.Default.Edit, it) },
+            TvMenuEntry(stringResource(R.string.action_stats), Icons.Default.Info, onStatsClick),
+        )
+    } else {
+        home = TvMenuEntry(stringResource(R.string.tv_menu_servers), Icons.AutoMirrored.Filled.List)
+        entries = listOf(TvMenuEntry(stringResource(R.string.add_server), Icons.Default.Add, onAddServerClick))
+    }
+
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground
+    ) {
+        TvShell(
+            home = home,
+            entries = entries,
+            footerEntries = listOf(settings, exit),
+            onLeave = onLeaveApp,
+            header = { open -> TvMenuHeader(connectionState, open) }
+        ) {
+            if (connected) nowPlaying() else serverListContent()
+        }
+    }
+}
+
+/** The app's name and, when connected, the server and its status. */
+@Composable
+private fun TvMenuHeader(connectionState: AppConnectionState, open: Boolean) {
+    val serverName = when (connectionState) {
+        is AppConnectionState.Connected -> connectionState.serverName
+        is AppConnectionState.Connecting -> connectionState.serverName
+        is AppConnectionState.Reconnecting -> connectionState.serverName
+        else -> null
+    }
+    if (!open) {
+        // Lines the dot up with the icons of the collapsed entries
+        Box(modifier = Modifier.width(56.dp).height(48.dp), contentAlignment = Alignment.Center) {
+            if (serverName != null) {
+                ConnectionStatusDot(connectionState = connectionState, modifier = Modifier.size(12.dp))
+            }
+        }
+        return
+    }
+    Column(modifier = Modifier.width(232.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Text(
+            text = stringResource(R.string.app_name),
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (serverName != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ConnectionStatusDot(connectionState = connectionState, modifier = Modifier.size(12.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (connectionState is AppConnectionState.Reconnecting) {
+                        stringResource(R.string.reconnecting_toolbar_subtitle)
+                    } else {
+                        serverName
+                    },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
 }

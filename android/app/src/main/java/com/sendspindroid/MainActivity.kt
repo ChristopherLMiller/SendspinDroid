@@ -80,6 +80,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import com.sendspindroid.ui.AppShell
@@ -118,8 +119,9 @@ class MainActivity : AppCompatActivity() {
     // Connection state machine - starts with ServerList (shows immediately on startup)
     private var connectionState: AppConnectionState = AppConnectionState.ServerList
 
-    // Track the currently connected server ID for editing
-    private var currentConnectedServerId: String? = null
+    // Track the currently connected server ID for editing. Compose state, so
+    // the TV menu offers Edit Server only while there is a server to edit.
+    private var currentConnectedServerId: String? by mutableStateOf(null)
 
     // NsdManager-based discovery (Android native - more reliable than Go's hashicorp/mdns)
     private var discoveryManager: NsdDiscoveryManager? = null
@@ -638,7 +640,12 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         },
-                        onExitAppClick = { onExitAppClicked() }
+                        onExitAppClick = { onExitAppClicked() },
+                        canEditServer = currentConnectedServerId
+                            ?.let { UnifiedServerRepository.getServer(it) } != null,
+                        // As Android 12 and later do for the launcher's activity: the
+                        // app keeps its state and keeps playing.
+                        onLeaveApp = { moveTaskToBack(true) }
                     )
                 }
             }
@@ -1774,6 +1781,7 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.disconnect_dialog_negative, null)
             .show()
+            .focusCancelOnTv()
     }
 
     /**
@@ -1819,6 +1827,16 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.disconnect_dialog_negative, null)
             .show()
+            .focusCancelOnTv()
+    }
+
+    /**
+     * On a TV, starts a confirmation with focus on Cancel. Without it the
+     * dialog focuses its message, which shows nothing, so the first press of
+     * OK seems to do nothing.
+     */
+    private fun androidx.appcompat.app.AlertDialog.focusCancelOnTv() {
+        if (isTvDevice) getButton(DialogInterface.BUTTON_NEGATIVE)?.requestFocus()
     }
 
     /**
