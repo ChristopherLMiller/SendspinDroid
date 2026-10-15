@@ -10,6 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -120,6 +121,30 @@ fun TvInitialFocus(focusRequester: FocusRequester) {
             focusRequester.requestFocus()
         }
     }
+}
+
+/**
+ * For an element that is focusable only some of the time: when it stops being
+ * focusable while it has focus, focus moves to [fallback]. Compose drops focus
+ * to nothing when the focused element goes, which leaves a remote with nothing
+ * on screen to act on.
+ *
+ * Put the returned modifier on the element, before its focus target, or on a
+ * container of it. [canFocus] is whether the element is focusable now.
+ */
+@Composable
+fun rememberFocusFallback(canFocus: Boolean, fallback: FocusRequester): Modifier {
+    var hasFocus by remember { mutableStateOf(false) }
+    val canFocusNow by rememberUpdatedState(canFocus)
+    LaunchedEffect(canFocus) {
+        if (!canFocus && hasFocus) {
+            hasFocus = false
+            fallback.requestFocus()
+        }
+    }
+    // The focus change that the element's own removal causes is ignored:
+    // that loss is what the effect above looks for.
+    return remember { Modifier.onFocusChanged { if (canFocusNow) hasFocus = it.hasFocus } }
 }
 
 /**

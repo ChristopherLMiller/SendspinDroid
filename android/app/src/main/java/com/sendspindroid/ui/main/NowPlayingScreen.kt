@@ -52,7 +52,10 @@ import com.sendspindroid.ui.adaptive.AdaptiveDefaults
 import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.adaptive.TvInitialFocus
+import com.sendspindroid.ui.adaptive.TvOverscanHorizontal
+import com.sendspindroid.ui.adaptive.TvOverscanVertical
 import com.sendspindroid.ui.adaptive.overscanSafe
+import com.sendspindroid.ui.adaptive.rememberFocusFallback
 import com.sendspindroid.ui.adaptive.tvFocusRing
 import com.sendspindroid.ui.main.components.AlbumArtCard
 import com.sendspindroid.ui.main.components.ConnectionProgress
@@ -193,7 +196,9 @@ fun NowPlayingScreen(
                     onPreviousClick = onPreviousClick,
                     onPlayPauseClick = onPlayPauseClick,
                     onNextClick = onNextClick,
-                    onSwitchGroupClick = onSwitchGroupClick
+                    onSwitchGroupClick = onSwitchGroupClick,
+                    seekable = seekable && controlsEnabled,
+                    onSeek = onSeek
                 )
             }
             isLandscape -> {
@@ -250,7 +255,18 @@ fun NowPlayingScreen(
                 state = state,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(16.dp)
+                    .then(
+                        // Inside the part of the picture every TV shows
+                        if (formFactor == FormFactor.TV) {
+                            Modifier.padding(
+                                start = TvOverscanHorizontal,
+                                top = TvOverscanVertical,
+                                end = TvOverscanHorizontal
+                            )
+                        } else {
+                            Modifier.padding(16.dp)
+                        }
+                    )
             )
         }
     }
@@ -538,7 +554,8 @@ private fun NowPlayingLandscape(
 
 /**
  * TV cinematic layout: Large album art left, metadata + controls right.
- * No volume slider (TV remote handles volume). Visual progress bar.
+ * No volume slider (TV remote handles volume). Visual progress bar, which
+ * Left and Right step through when [seekable].
  * D-pad focus management with focus rings on all interactive elements.
  */
 @Composable
@@ -558,6 +575,8 @@ private fun NowPlayingTv(
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit,
     onSwitchGroupClick: () -> Unit,
+    seekable: Boolean = false,
+    onSeek: (Long) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val formFactor = LocalFormFactor.current
@@ -584,7 +603,8 @@ private fun NowPlayingTv(
                 artworkSource = artworkSource,
                 isBuffering = isBuffering,
                 maxWidth = AdaptiveDefaults.albumArtMaxSize(formFactor),
-                modifier = Modifier.fillMaxHeight()
+                modifier = Modifier.fillMaxHeight(),
+                focusFallback = playFocusRequester
             )
 
             Spacer(modifier = Modifier.width(32.dp))
@@ -597,10 +617,13 @@ private fun NowPlayingTv(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                // Track Title
+                // Track Title. The line height has to grow with the size, or
+                // the two lines of a long title overlap.
+                val titleSize = AdaptiveDefaults.titleTextSize(formFactor)
                 Text(
                     text = metadata.title.ifEmpty { stringResource(R.string.not_playing) },
-                    fontSize = AdaptiveDefaults.titleTextSize(formFactor),
+                    fontSize = titleSize,
+                    lineHeight = titleSize * 1.2f,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
                     textAlign = TextAlign.Center,
@@ -649,7 +672,13 @@ private fun NowPlayingTv(
                     durationMs = durationMs,
                     playbackSpeed = playbackSpeed,
                     accentColor = accentColor,
-                    positionUpdatedAt = positionUpdatedAt
+                    positionUpdatedAt = positionUpdatedAt,
+                    seekable = seekable,
+                    onSeek = onSeek,
+                    modifier = rememberFocusFallback(
+                        canFocus = seekable && durationMs > 0,
+                        fallback = playFocusRequester
+                    )
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))

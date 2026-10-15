@@ -1,13 +1,27 @@
 package com.sendspindroid.ui.compose
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isFocusable
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
@@ -65,6 +79,40 @@ class AlbumArtCardTvTest {
     fun `on a TV with no artist photo the card does not take focus`() {
         showCard(FormFactor.TV, artistImage = null)
         composeTestRule.onAllNodes(isFocusable()).assertCountEquals(0)
+    }
+
+    @Test
+    fun `on a TV focus goes to the fallback when the focused card stops taking focus`() {
+        var artistImage by mutableStateOf<ByteArray?>(ByteArray(1))
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalFormFactor provides FormFactor.TV) {
+                SendSpinTheme {
+                    val play = remember { FocusRequester() }
+                    Column {
+                        // First in line: where focus would land if nothing moved it
+                        Button(onClick = {}) { Text("Menu") }
+                        AlbumArtCard(
+                            artworkSource = null,
+                            isBuffering = false,
+                            artistImage = artistImage,
+                            focusFallback = play
+                        )
+                        Button(onClick = {}, modifier = Modifier.focusRequester(play)) {
+                            Text("Play")
+                        }
+                    }
+                }
+            }
+        }
+        val card = composeTestRule.onNode(isFocusable() and hasAnyDescendant(hasContentDescription(albumArt)))
+        card.requestFocus()
+        card.assertIsFocused()
+
+        // The next track has no artist photo
+        artistImage = null
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Play").assertIsFocused()
     }
 
     @Test

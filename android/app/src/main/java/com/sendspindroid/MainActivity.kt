@@ -56,6 +56,7 @@ import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import com.sendspindroid.ui.settings.message
 import com.sendspindroid.model.UnifiedServer
+import com.sendspindroid.model.trackPositionMs
 import com.sendspindroid.network.ConnectionSelector
 import com.sendspindroid.network.DefaultServerPinger
 import com.sendspindroid.ui.server.AddServerWizardActivity
@@ -74,6 +75,7 @@ import com.sendspindroid.ui.main.PlaybackState
 import com.sendspindroid.ui.main.ArtworkSource
 import com.sendspindroid.ui.main.ServerListScreen
 import com.sendspindroid.ui.main.components.ConnectionModeState
+import com.sendspindroid.ui.main.components.SEEK_STEP_MS
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.DisposableEffect
@@ -321,6 +323,11 @@ class MainActivity : AppCompatActivity() {
     private fun showReconnectingIndicator(attempt: Int) {
         // Don't show UI if activity is finishing or destroyed
         if (isFinishing || isDestroyed) {
+            return
+        }
+        // On a TV the banner over Now Playing says it already, and an
+        // indefinite snackbar would sit over the transport controls.
+        if (isTvDevice) {
             return
         }
 
@@ -1712,6 +1719,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Seeks [deltaMs] from the position Now Playing shows, for the remote's
+     * fast-forward and rewind keys.
+     */
+    private fun seekBy(deltaMs: Long) {
+        val durationMs = viewModel.durationMs.value
+        if (durationMs <= 0) return
+        val shownMs = trackPositionMs(
+            anchorPositionMs = viewModel.positionMs.value,
+            elapsedMs = SystemClock.elapsedRealtime() - viewModel.positionUpdatedAt.value,
+            playbackSpeed = viewModel.playbackSpeed.value,
+            durationMs = durationMs
+        )
+        onSeekRequested((shownMs + deltaMs).coerceIn(0L, durationMs))
+    }
+
+    /**
      * Handles switch group button click.
      * Sends switch group command to PlaybackService to cycle to next available group.
      */
@@ -1964,39 +1987,64 @@ class MainActivity : AppCompatActivity() {
      * Handles key events from TV remotes and D-pad controllers.
      *
      * Media keys (play/pause, next, previous) are handled when connected to a server.
-     * On TV devices, volume up/down keys adjust the app volume slider instead of
-     * system volume, providing a more intuitive experience.
+     * On TV devices, fast-forward and rewind seek when the server offers it, and
+     * volume up/down keys adjust the app volume slider instead of system volume,
+     * providing a more intuitive experience.
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Holding a key repeats it, and each repeat would be another command
+        // to the server: only the first press of a transport key acts. The
+        // repeats are still consumed, so nothing else acts on them either.
+        val firstPress = (event?.repeatCount ?: 0) == 0
+
         // Handle media keys when connected to a server
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPlayPauseClicked()
+                    if (firstPress) onPlayPauseClicked()
                     return true
                 }
             }
+            // PLAY and PAUSE are not toggles: a CEC remote sends PLAY for its
+            // Play button while the music plays, too. playWhenReady rather than
+            // isPlaying, so a pause also stops a stream that is still starting.
             KeyEvent.KEYCODE_MEDIA_PLAY -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPlayPauseClicked()
+                    val controller = mediaController
+                    if (firstPress && controller != null && !controller.playWhenReady) {
+                        Log.d(TAG, "Play key")
+                        controller.play()
+                    }
                     return true
                 }
             }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPlayPauseClicked()
+                    val controller = mediaController
+                    if (firstPress && controller != null && controller.playWhenReady) {
+                        Log.d(TAG, "Pause key")
+                        controller.pause()
+                    }
                     return true
                 }
             }
             KeyEvent.KEYCODE_MEDIA_NEXT -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onNextClicked()
+                    if (firstPress) onNextClicked()
                     return true
                 }
             }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPreviousClicked()
+                    if (firstPress) onPreviousClicked()
+                    return true
+                }
+            }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                if (isTvDevice && connectionState is AppConnectionState.Connected && viewModel.seekable.value) {
+                    if (firstPress) {
+                        seekBy(if (keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) SEEK_STEP_MS else -SEEK_STEP_MS)
+                    }
                     return true
                 }
             }
