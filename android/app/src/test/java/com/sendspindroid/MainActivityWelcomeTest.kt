@@ -18,6 +18,7 @@ import androidx.preference.PreferenceManager
 import com.google.android.material.shape.MaterialShapeDrawable
 import com.sendspindroid.playback.PlaybackService
 import com.sendspindroid.ui.settings.SettingsViewModel
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -54,6 +55,15 @@ class MainActivityWelcomeTest {
         // controller's bind with a null component, which media3 throws on.
         // Refused, the bind fails as it would for a missing service.
         shadowOf(app).declareComponentUnbindable(ComponentName(app, PlaybackService::class.java))
+    }
+
+    // A post left on the main looper is dropped when the test ends. Compose's
+    // AndroidUiDispatcher, which every test in this JVM shares, never posts
+    // again after one of its posts is dropped, and a Compose test that runs
+    // after this one would never get idle.
+    @After
+    fun drainMainLooper() {
+        shadowOf(Looper.getMainLooper()).idle()
     }
 
     private fun welcomeDone() =
