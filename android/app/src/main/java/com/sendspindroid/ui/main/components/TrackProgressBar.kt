@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -173,13 +174,15 @@ fun TvTrackProgressBar(
     // Where the user stepped to
     val seek = rememberPendingSeek(positionMs, positionUpdatedAt)
     val currentOnSeek by rememberUpdatedState(onSeek)
+    var steps by remember { mutableIntStateOf(0) }
 
     // A press restarts the wait, so a run of presses is one seek: each seek
-    // restarts the stream for the group.
-    LaunchedEffect(seek.positionMs) {
-        val target = seek.positionMs ?: return@LaunchedEffect
-        if (seek.awaitingServer) return@LaunchedEffect
+    // restarts the stream for the group. Keyed on the presses, not the
+    // position: presses can bring it back to the one that already went out.
+    LaunchedEffect(steps) {
+        if (steps == 0) return@LaunchedEffect
         delay(SEEK_STEP_SETTLE_MS)
+        val target = seek.positionMs ?: return@LaunchedEffect
         currentOnSeek(target)
         seek.awaitingServer = true
     }
@@ -201,9 +204,16 @@ fun TvTrackProgressBar(
                     else -> return@onPreviewKeyEvent false
                 }
                 if (event.type == KeyEventType.KeyDown) {
-                    seek.positionMs = ((seek.positionMs ?: displayPositionMs) + step)
-                        .coerceIn(0L, durationMs)
-                    seek.awaitingServer = false
+                    val from = seek.positionMs ?: displayPositionMs
+                    val to = (from + step).coerceIn(0L, durationMs)
+                    // A press against the start or the end moves nothing, so
+                    // it sends nothing and leaves a seek that went out waiting
+                    // for the server's answer.
+                    if (to != from) {
+                        seek.positionMs = to
+                        seek.awaitingServer = false
+                        steps++
+                    }
                 }
                 true
             }

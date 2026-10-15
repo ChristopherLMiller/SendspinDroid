@@ -54,6 +54,8 @@ class TvTrackProgressBarTest {
 
     private val seeks = mutableListOf<Long>()
     private var durationMs by mutableLongStateOf(180_000L)
+    private var positionMs by mutableLongStateOf(60_000L)
+    private var positionUpdatedAt by mutableLongStateOf(1L)
 
     /** A paused 3:00 track at 1:00, so the display shows exactly the position it holds. */
     private fun showBar(seekable: Boolean) {
@@ -65,11 +67,11 @@ class TvTrackProgressBarTest {
                         // First in line: where focus would land if nothing moved it
                         Button(onClick = {}) { Text("Menu") }
                         TvTrackProgressBar(
-                            positionMs = 60_000,
+                            positionMs = positionMs,
                             durationMs = durationMs,
                             playbackSpeed = 0,
                             accentColor = null,
-                            positionUpdatedAt = 1L,
+                            positionUpdatedAt = positionUpdatedAt,
                             seekable = seekable,
                             onSeek = { seeks += it },
                             modifier = rememberFocusFallback(
@@ -131,6 +133,51 @@ class TvTrackProgressBarTest {
 
         composeTestRule.mainClock.advanceTimeBy(600)
         assertEquals(listOf(80_000L), seeks)
+    }
+
+    @Test
+    fun `a press against the start after the seek went out does not hold the bar there`() {
+        positionMs = 5_000
+        showBar(seekable = true)
+        bar().requestFocus()
+
+        press(Key.DirectionLeft)
+        composeTestRule.mainClock.advanceTimeBy(900)
+        assertEquals(listOf(0L), seeks)
+
+        // Still held: the bar cannot go below 0:00.
+        press(Key.DirectionLeft)
+        // The server answers from elsewhere in the track.
+        positionMs = 30_000
+        positionUpdatedAt = 2L
+        composeTestRule.mainClock.advanceTimeBy(5_000)
+
+        composeTestRule.onNodeWithText("0:30").assertIsDisplayed()
+        assertEquals(listOf(0L), seeks)
+    }
+
+    @Test
+    fun `presses that come back to the position that went out still wait for the server`() {
+        showBar(seekable = true)
+        bar().requestFocus()
+
+        press(Key.DirectionRight)
+        composeTestRule.mainClock.advanceTimeBy(900)
+        assertEquals(listOf(70_000L), seeks)
+
+        // Away and back before the screen next updates.
+        bar().performKeyInput {
+            pressKey(Key.DirectionRight)
+            pressKey(Key.DirectionLeft)
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeBy(900)
+        // The server answers from elsewhere in the track.
+        positionMs = 30_000
+        positionUpdatedAt = 2L
+        composeTestRule.mainClock.advanceTimeBy(100)
+
+        composeTestRule.onNodeWithText("0:30").assertIsDisplayed()
     }
 
     @Test
