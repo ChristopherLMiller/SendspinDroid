@@ -54,7 +54,9 @@ import kotlinx.coroutines.isActive
  * Track progress bar with elapsed / total timestamps beneath it.
  *
  * When [seekable], the bar is a slider: dragging previews the position and
- * releasing calls [onSeek] once. Otherwise it is a read-only bar.
+ * releasing calls [onSeek] once. Left and Right on the focused slider step
+ * as on [TvTrackProgressBar], with one [onSeek] once the presses stop.
+ * Otherwise it is a read-only bar.
  *
  * Advances the position at the server's [playbackSpeed] (1000 = normal,
  * 0 = paused) from the last server position update. Hidden when duration is
@@ -81,6 +83,7 @@ fun TrackProgressBar(
     val barColor = accentColor ?: MaterialTheme.colorScheme.primary
     val barDescription = stringResource(R.string.track_position)
     val focusManager = LocalFocusManager.current
+    val stepOnArrows = rememberArrowKeySeek(seek, displayPositionMs, durationMs, onSeek)
 
     Column(modifier = modifier.fillMaxWidth()) {
         if (seekable) {
@@ -101,7 +104,8 @@ fun TrackProgressBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics { contentDescription = barDescription }
-                    .upDownMovesFocus(focusManager),
+                    .upDownMovesFocus(focusManager)
+                    .then(stepOnArrows),
                 colors = SliderDefaults.colors(
                     thumbColor = barColor,
                     activeTrackColor = barColor,
@@ -140,14 +144,14 @@ fun TrackProgressBar(
 private const val SEEK_HOLD_MS = 2000L
 
 /**
- * How far one press of Left or Right on the TV progress bar, or of the
- * remote's fast-forward or rewind key, moves the track.
+ * How far one press of Left or Right on a progress bar, or of the remote's
+ * fast-forward or rewind key, moves the track.
  */
 internal const val SEEK_STEP_MS = 10_000L
 
 /**
- * How long the TV progress bar waits after the last Left or Right press
- * before it sends the seek.
+ * How long a progress bar waits after the last Left or Right press before it
+ * sends the seek.
  */
 private const val SEEK_STEP_SETTLE_MS = 800L
 
@@ -176,19 +180,7 @@ fun TvTrackProgressBar(
         rememberTrackPositionMs(positionMs, durationMs, playbackSpeed, positionUpdatedAt)
     // Where the user stepped to
     val seek = rememberPendingSeek(positionMs, positionUpdatedAt)
-    val currentOnSeek by rememberUpdatedState(onSeek)
-    var steps by remember { mutableIntStateOf(0) }
-
-    // A press restarts the wait, so a run of presses is one seek: each seek
-    // restarts the stream for the group. Keyed on the presses, not the
-    // position: presses can bring it back to the one that already went out.
-    LaunchedEffect(steps) {
-        if (steps == 0) return@LaunchedEffect
-        delay(SEEK_STEP_SETTLE_MS)
-        val target = seek.positionMs ?: return@LaunchedEffect
-        currentOnSeek(target)
-        seek.awaitingServer = true
-    }
+    val stepOnArrows = rememberArrowKeySeek(seek, displayPositionMs, durationMs, onSeek)
 
     val shownPositionMs = seek.positionMs ?: displayPositionMs
     val progress = (shownPositionMs.toFloat() / durationMs).coerceIn(0f, 1f)
@@ -199,27 +191,7 @@ fun TvTrackProgressBar(
     val barDescription = stringResource(R.string.track_position)
 
     val stepOnDpad = if (seekable) {
-        Modifier
-            .onPreviewKeyEvent { event ->
-                val step = when (event.key) {
-                    Key.DirectionRight -> SEEK_STEP_MS
-                    Key.DirectionLeft -> -SEEK_STEP_MS
-                    else -> return@onPreviewKeyEvent false
-                }
-                if (event.type == KeyEventType.KeyDown) {
-                    val from = seek.positionMs ?: displayPositionMs
-                    val to = (from + step).coerceIn(0L, durationMs)
-                    // A press against the start or the end moves nothing, so
-                    // it sends nothing and leaves a seek that went out waiting
-                    // for the server's answer.
-                    if (to != from) {
-                        seek.positionMs = to
-                        seek.awaitingServer = false
-                        steps++
-                    }
-                }
-                true
-            }
+        stepOnArrows
             // Not scaled: a full-width bar would grow past the timestamps.
             .tvFocusable(shape = RoundedCornerShape(barCornerRadius), focusScale = 1f)
     } else {
@@ -292,6 +264,57 @@ private fun rememberPendingSeek(positionMs: Long, positionUpdatedAt: Long): Pend
         }
     }
     return seek
+}
+
+/**
+ * Left and Right move [seek] by [SEEK_STEP_MS]. The steps add up while the
+ * user keeps pressing, and [onSeek] is called once when they stop.
+ *
+ * Put the returned modifier on the bar, before its focus target. It takes
+ * both keys on key down and on key up, so a material3 Slider, which from 1.4
+ * steps on them and finishes its change on each key up, never sees them.
+ */
+@Composable
+private fun rememberArrowKeySeek(
+    seek: PendingSeek,
+    displayPositionMs: Long,
+    durationMs: Long,
+    onSeek: (Long) -> Unit
+): Modifier {
+    val currentOnSeek by rememberUpdatedState(onSeek)
+    var steps by remember { mutableIntStateOf(0) }
+
+    // A press restarts the wait, so a run of presses is one seek: each seek
+    // restarts the stream for the group. Keyed on the presses, not the
+    // position: presses can bring it back to the one that already went out.
+    LaunchedEffect(steps) {
+        if (steps == 0) return@LaunchedEffect
+        delay(SEEK_STEP_SETTLE_MS)
+        val target = seek.positionMs ?: return@LaunchedEffect
+        currentOnSeek(target)
+        seek.awaitingServer = true
+    }
+
+    return Modifier.onPreviewKeyEvent { event ->
+        val step = when (event.key) {
+            Key.DirectionRight -> SEEK_STEP_MS
+            Key.DirectionLeft -> -SEEK_STEP_MS
+            else -> return@onPreviewKeyEvent false
+        }
+        if (event.type == KeyEventType.KeyDown) {
+            val from = seek.positionMs ?: displayPositionMs
+            val to = (from + step).coerceIn(0L, durationMs)
+            // A press against the start or the end moves nothing, so it
+            // sends nothing and leaves a seek that went out waiting for the
+            // server's answer.
+            if (to != from) {
+                seek.positionMs = to
+                seek.awaitingServer = false
+                steps++
+            }
+        }
+        true
+    }
 }
 
 /**

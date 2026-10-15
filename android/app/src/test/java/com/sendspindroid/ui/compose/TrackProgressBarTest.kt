@@ -222,4 +222,25 @@ class TrackProgressBarTest {
 
         assertTrue(seeks.isEmpty())
     }
+
+    @Test
+    fun seekable_aRunOfLeftAndRightPresses_seeksOnceWhenTheyStop() {
+        serverPositionMs = 90_000
+        setPausedBar(seekable = true)
+        bar().requestFocus()
+
+        // A keyboard on a phone or tablet: the Slider alone would seek on
+        // each key up.
+        for (key in listOf(Key.DirectionRight, Key.DirectionRight, Key.DirectionRight, Key.DirectionLeft)) {
+            bar().performKeyInput { pressKey(key) }
+            composeTestRule.waitForIdle()
+            composeTestRule.mainClock.advanceTimeBy(300)
+        }
+        // Each seek restarts the stream for the group: none while stepping.
+        assertTrue(seeks.isEmpty())
+        composeTestRule.onNodeWithText("1:50 / 3:00").assertIsDisplayed()
+
+        composeTestRule.mainClock.advanceTimeBy(600)
+        assertEquals(listOf(110_000L), seeks)
+    }
 }
