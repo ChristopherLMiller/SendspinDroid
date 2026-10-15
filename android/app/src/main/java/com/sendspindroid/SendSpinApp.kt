@@ -10,6 +10,7 @@ import com.google.android.material.color.DynamicColors
 import com.sendspindroid.diagnostics.Telemetry
 import com.sendspindroid.logging.AppLog
 import com.sendspindroid.logging.CrashHandler
+import com.sendspindroid.ui.adaptive.isTvDevice
 
 /**
  * Preferences file of the removed Music Assistant API client. It held that
@@ -44,7 +45,7 @@ class SendSpinApp : Application(), ImageLoaderFactory {
         DynamicColors.applyToActivitiesIfAvailable(this)
         // Apply the saved light/dark choice before the first Activity inflates.
         UserSettings.initialize(this)
-        AppCompatDelegate.setDefaultNightMode(UserSettings.themeMode.nightMode)
+        AppCompatDelegate.setDefaultNightMode(UserSettings.themeMode.nightMode(isTvDevice()))
     }
 
     /**

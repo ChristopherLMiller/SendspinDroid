@@ -21,6 +21,7 @@ import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.pairing.PairingOutcome
 import com.sendspindroid.sendspin.pairing.PairingToken
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
+import com.sendspindroid.ui.adaptive.isTvDevice
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -203,7 +204,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         UserSettings.themeMode = mode
         _themeMode.value = mode
         // Recreates the running activities in the new theme.
-        AppCompatDelegate.setDefaultNightMode(mode.nightMode)
+        AppCompatDelegate.setDefaultNightMode(mode.nightMode(getApplication<Application>().isTvDevice()))
     }
 
     // Audio settings

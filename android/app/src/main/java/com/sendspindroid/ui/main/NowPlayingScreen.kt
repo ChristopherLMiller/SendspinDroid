@@ -1,6 +1,7 @@
 package com.sendspindroid.ui.main
 
 import android.content.res.Configuration
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,7 +53,7 @@ import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.adaptive.TvInitialFocus
 import com.sendspindroid.ui.adaptive.overscanSafe
-import com.sendspindroid.ui.adaptive.tvFocusable
+import com.sendspindroid.ui.adaptive.tvFocusRing
 import com.sendspindroid.ui.main.components.AlbumArtCard
 import com.sendspindroid.ui.main.components.ConnectionProgress
 import com.sendspindroid.ui.main.components.PlaybackControls
@@ -683,7 +684,7 @@ private fun NowPlayingTv(
                         enabled = controlsEnabled,
                         modifier = Modifier
                             .size(secondarySize)
-                            .tvFocusable()
+                            .tvFocusRing(shape = CircleShape)
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_swap_horiz),

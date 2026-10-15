@@ -77,7 +77,7 @@ fun AlbumArtCard(
                 }
                 ok
             }
-            .tvFocusable(cornerRadius = 16.dp)
+            .tvFocusable(shape = RoundedCornerShape(16.dp))
     } else {
         Modifier
     }

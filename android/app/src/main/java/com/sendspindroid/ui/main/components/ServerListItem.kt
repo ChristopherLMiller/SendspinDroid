@@ -36,7 +36,7 @@ import com.sendspindroid.R
 import com.sendspindroid.model.ConnectionType
 import com.sendspindroid.model.LocalConnection
 import com.sendspindroid.model.UnifiedServer
-import com.sendspindroid.ui.adaptive.tvFocusable
+import com.sendspindroid.ui.adaptive.tvFocusRing
 import com.sendspindroid.ui.theme.SendSpinTheme
 import com.sendspindroid.ui.theme.statusOnline
 import com.sendspindroid.ui.theme.statusWarning
@@ -72,7 +72,7 @@ fun ServerListItem(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp)
-            .tvFocusable()
+            .tvFocusRing()
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick

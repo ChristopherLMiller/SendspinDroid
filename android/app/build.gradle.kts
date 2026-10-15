@@ -226,6 +226,11 @@ dependencies {
     // Foundation - core layout primitives (Column, Row, Box, LazyColumn)
     implementation("androidx.compose.foundation:foundation")
 
+    // Compose for TV - the side menu of the TV shell. 1.0.1 is built against
+    // Compose 1.6, so it leaves the BOM's versions as they are; 1.1 would raise
+    // Compose to 1.10 for every form factor.
+    implementation("androidx.tv:tv-material:1.0.1")
+
     // UI Tooling - @Preview support and debugging tools
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")

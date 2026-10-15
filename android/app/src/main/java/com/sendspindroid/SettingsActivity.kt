@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
+import com.sendspindroid.ui.adaptive.ProvideTvFormFactor
 
 /**
  * Activity hosting the Compose-based settings screen.
@@ -40,13 +41,15 @@ class SettingsActivity : AppCompatActivity() {
 
         setContent {
             SendSpinTheme {
-                SettingsScreen(
-                    viewModel = viewModel,
-                    onNavigateBack = { finish() },
-                    onExportLogs = { exportDebugLogs() },
-                    onReportProblem = { reportProblem() },
-                    onRestartApp = { restartApp() }
-                )
+                ProvideTvFormFactor {
+                    SettingsScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { finish() },
+                        onExportLogs = { exportDebugLogs() },
+                        onReportProblem = { reportProblem() },
+                        onRestartApp = { restartApp() }
+                    )
+                }
             }
         }
     }

@@ -1,7 +1,6 @@
 package com.sendspindroid.ui.adaptive
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,40 +13,49 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.unit.dp
 
+/** Horizontal TV safe-area margin (Android TV layout guidance: 48dp). */
+val TvOverscanHorizontal = 48.dp
+
+/** Vertical TV safe-area margin (Android TV layout guidance: 27dp). */
+val TvOverscanVertical = 27.dp
+
 /**
- * TV focus modifier that adds:
- * - Focusable behavior for D-pad navigation
- * - Visible focus ring (3dp border in primary color) when focused
- * - Subtle scale animation (1.05x) on focus for visual feedback
+ * TV focus treatment for a control that is focusable on its own, such as a
+ * Button, an IconButton or anything with Modifier.clickable:
+ * - a ring in the theme's onSurface colour, drawn just outside the control
+ *   in its own [shape], so it shows against a filled primary button too
+ * - a scale of [focusScale] while focused
  *
- * Use this on all interactive elements (buttons, cards, list items) on TV.
- * On non-TV devices, this just adds focusable() without visual effects.
+ * It adds no focus target of its own. Placed before the control's modifiers,
+ * onFocusChanged observes the control's focus target, so each control stays a
+ * single stop for the D-pad and OK reaches its click handler at once.
+ *
+ * On other form factors it only attaches [focusRequester].
  *
  * @param focusRequester Optional FocusRequester for programmatic focus control
- * @param borderWidth Width of the focus ring border
- * @param cornerRadius Corner radius of the focus ring
+ * @param shape The control's shape, which the ring follows
  * @param focusScale Scale factor when focused (1.0 = no scale)
  */
-fun Modifier.tvFocusable(
+fun Modifier.tvFocusRing(
     focusRequester: FocusRequester? = null,
-    borderWidth: Dp = 3.dp,
-    cornerRadius: Dp = 12.dp,
-    focusScale: Float = 1.05f
+    shape: Shape = RoundedCornerShape(12.dp),
+    focusScale: Float = 1.1f
 ): Modifier = composed {
-    val formFactor = LocalFormFactor.current
-
-    if (formFactor != FormFactor.TV) {
-        return@composed this
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
+    val withRequester = if (focusRequester != null) this.focusRequester(focusRequester) else this
+    if (LocalFormFactor.current != FormFactor.TV) {
+        return@composed withRequester
     }
 
     var isFocused by remember { mutableStateOf(false) }
@@ -55,23 +63,48 @@ fun Modifier.tvFocusable(
         targetValue = if (isFocused) focusScale else 1f,
         label = "tv_focus_scale"
     )
-    val borderColor = if (isFocused) {
-        MaterialTheme.colorScheme.primary
-    } else {
-        Color.Transparent
-    }
+    val ringColor = MaterialTheme.colorScheme.onSurface
 
-    this
-        .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+    withRequester
         .scale(scale)
-        .border(
-            width = borderWidth,
-            color = borderColor,
-            shape = RoundedCornerShape(cornerRadius)
-        )
+        .drawWithContent {
+            drawContent()
+            if (isFocused) {
+                val gap = RingGap.toPx()
+                val width = RingWidth.toPx()
+                val inset = gap + width / 2
+                val outline = shape.createOutline(
+                    Size(size.width + inset * 2, size.height + inset * 2),
+                    layoutDirection,
+                    this
+                )
+                translate(-inset, -inset) {
+                    drawOutline(outline, ringColor, style = Stroke(width))
+                }
+            }
+        }
         .onFocusChanged { isFocused = it.isFocused }
-        .focusable()
 }
+
+private val RingGap = 2.dp
+private val RingWidth = 3.dp
+
+/**
+ * TV focus treatment for an element that is not otherwise focusable, such as
+ * the album art card: it adds a focus target as well as the ring and scale of
+ * [tvFocusRing]. Do not use it on something clickable, which already has a
+ * focus target; that would make the element two D-pad stops. Use
+ * [tvFocusRing] there.
+ *
+ * On other form factors it only adds focusable().
+ */
+fun Modifier.tvFocusable(
+    focusRequester: FocusRequester? = null,
+    shape: Shape = RoundedCornerShape(12.dp),
+    focusScale: Float = 1.05f
+): Modifier = this
+    .tvFocusRing(focusRequester = focusRequester, shape = shape, focusScale = focusScale)
+    .focusable()
 
 /**
  * Requests focus on first composition for TV initial focus.
@@ -90,7 +123,8 @@ fun TvInitialFocus(focusRequester: FocusRequester) {
 }
 
 /**
- * Applies overscan-safe padding on TV devices (48dp all sides).
+ * Applies the TV safe-area margins ([TvOverscanHorizontal] at the sides,
+ * [TvOverscanVertical] at the top and bottom) on TV devices.
  * On non-TV devices, applies no padding.
  *
  * Use this on the outermost container of each screen to ensure
@@ -99,7 +133,7 @@ fun TvInitialFocus(focusRequester: FocusRequester) {
 fun Modifier.overscanSafe(): Modifier = composed {
     val formFactor = LocalFormFactor.current
     if (formFactor == FormFactor.TV) {
-        this.padding(48.dp)
+        this.padding(horizontal = TvOverscanHorizontal, vertical = TvOverscanVertical)
     } else {
         this
     }
@@ -112,7 +146,7 @@ fun Modifier.overscanSafe(): Modifier = composed {
 fun Modifier.overscanSafeHorizontal(): Modifier = composed {
     val formFactor = LocalFormFactor.current
     if (formFactor == FormFactor.TV) {
-        this.padding(horizontal = 48.dp)
+        this.padding(horizontal = TvOverscanHorizontal)
     } else {
         this
     }

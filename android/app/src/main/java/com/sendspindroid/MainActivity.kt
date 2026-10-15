@@ -76,7 +76,6 @@ import com.sendspindroid.ui.main.ServerListScreen
 import com.sendspindroid.ui.main.components.ConnectionModeState
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,7 +84,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import com.sendspindroid.ui.AppShell
 import com.sendspindroid.ui.adaptive.FormFactor
-import com.sendspindroid.ui.adaptive.LocalFormFactor
+import com.sendspindroid.ui.adaptive.ProvideFormFactor
 import com.sendspindroid.ui.adaptive.determineFormFactor
 import com.sendspindroid.ui.adaptive.isTvDevice
 import com.sendspindroid.ui.theme.SendSpinTheme
@@ -577,13 +576,16 @@ class MainActivity : AppCompatActivity() {
                         .unregisterOnSharedPreferenceChangeListener(listener)
                 }
             }
-            val formFactor = when (layoutModeState.value) {
-                UserSettings.LayoutMode.HEADUNIT -> FormFactor.HEADUNIT
-                UserSettings.LayoutMode.AUTO -> detectedFormFactor
+            // A TV is driven by a remote, which the head-unit touch layout
+            // cannot be used with: the override does not apply there.
+            val formFactor = when {
+                detectedFormFactor == FormFactor.TV -> FormFactor.TV
+                layoutModeState.value == UserSettings.LayoutMode.HEADUNIT -> FormFactor.HEADUNIT
+                else -> detectedFormFactor
             }
 
             SendSpinTheme {
-                CompositionLocalProvider(LocalFormFactor provides formFactor) {
+                ProvideFormFactor(formFactor) {
                     AppShell(
                         viewModel = viewModel,
                         serverListContent = {

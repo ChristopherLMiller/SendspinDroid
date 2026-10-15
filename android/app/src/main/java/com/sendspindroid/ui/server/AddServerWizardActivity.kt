@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+import com.sendspindroid.ui.adaptive.ProvideTvFormFactor
 
 /**
  * Full-screen wizard Activity for adding or editing unified servers.
@@ -106,24 +107,26 @@ class AddServerWizardActivity : AppCompatActivity() {
 
         setContent {
             SendSpinTheme {
-                val state by viewModel.wizardState.collectAsStateWithLifecycle()
+                ProvideTvFormFactor {
+                    val state by viewModel.wizardState.collectAsStateWithLifecycle()
 
-                // Auto-start discovery when entering the FindServer step
-                LaunchedEffect(state.currentStep) {
-                    if (state.currentStep == WizardStep.SS_FindServer && !state.isSearching) {
-                        startDiscovery()
+                    // Auto-start discovery when entering the FindServer step
+                    LaunchedEffect(state.currentStep) {
+                        if (state.currentStep == WizardStep.SS_FindServer && !state.isSearching) {
+                            startDiscovery()
+                        }
                     }
-                }
 
-                AddServerWizardScreen(
-                    state = state,
-                    onClose = { finish() },
-                    onBack = { handleBack() },
-                    onNext = { handleNext() },
-                    onSave = { attemptSave() },
-                    onStepAction = { action -> handleStepAction(action) },
-                    searchAllowed = UserSettings.searchForServers
-                )
+                    AddServerWizardScreen(
+                        state = state,
+                        onClose = { finish() },
+                        onBack = { handleBack() },
+                        onNext = { handleNext() },
+                        onSave = { attemptSave() },
+                        onStepAction = { action -> handleStepAction(action) },
+                        searchAllowed = UserSettings.searchForServers
+                    )
+                }
             }
         }
     }
