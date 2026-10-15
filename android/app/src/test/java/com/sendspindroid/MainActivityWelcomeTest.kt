@@ -15,6 +15,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.core.view.children
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.preference.PreferenceManager
+import com.google.android.material.shape.MaterialShapeDrawable
 import com.sendspindroid.playback.PlaybackService
 import com.sendspindroid.ui.settings.SettingsViewModel
 import org.junit.Assert.assertEquals
@@ -116,6 +117,16 @@ class MainActivityWelcomeTest {
         Robolectric.buildActivity(MainActivity::class.java).create()
 
         assertEquals(Build.MODEL, welcomeDialog()!!.nameField().text.toString())
+    }
+
+    @Test
+    fun `the name field is the outlined field`() {
+        Robolectric.buildActivity(MainActivity::class.java).create()
+
+        // The TextInputLayout gives the field its outline as a background. A
+        // field that missed the layout's theme overlay keeps the plain
+        // EditText underline instead, and no outline is drawn.
+        assertTrue(welcomeDialog()!!.nameField().background is MaterialShapeDrawable)
     }
 
     @Test

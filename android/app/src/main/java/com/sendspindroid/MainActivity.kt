@@ -423,17 +423,19 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showOnboardingIfNeeded() {
         if (prefs.getBoolean(PREF_ONBOARDING_SHOWN, false)) return
-        val nameField = TextInputEditText(this).apply {
-            setText(UserSettings.getPlayerName())
-            isSingleLine = true
-            imeOptions = EditorInfo.IME_ACTION_DONE
-        }
         val nameLayout = TextInputLayout(
             this, null, com.google.android.material.R.attr.textInputOutlinedStyle
         ).apply {
             hint = getString(R.string.pref_player_name_title)
-            addView(nameField)
         }
+        // Made with the layout's context, which carries the outlined style's
+        // theme overlay: with the activity's, the field keeps an underline.
+        val nameField = TextInputEditText(nameLayout.context).apply {
+            setText(UserSettings.getPlayerName())
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+        nameLayout.addView(nameField)
         // A dialog's custom view gets no inset of its own: line it up with
         // the message.
         val inset = (24 * resources.displayMetrics.density).toInt()
