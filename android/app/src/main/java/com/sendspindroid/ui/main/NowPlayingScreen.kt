@@ -68,6 +68,7 @@ import com.sendspindroid.ui.main.components.VolumeSlider
 import com.sendspindroid.ui.preview.AllDevicePreviews
 import com.sendspindroid.ui.preview.TabletPreviews
 import com.sendspindroid.ui.theme.SendSpinTheme
+import com.sendspindroid.ui.tv.LocalTvMenuOpen
 
 /**
  * Now Playing screen showing album art, track info, and playback controls.
@@ -584,8 +585,9 @@ private fun NowPlayingTv(
     val playFocusRequester = remember { FocusRequester() }
 
     // Auto-focus Play button on first composition, or when the controls are
-    // enabled: just connected, the player has no state yet
-    TvInitialFocus(playFocusRequester, canFocus = controlsEnabled)
+    // enabled: just connected, the player has no state yet. Not while the
+    // user has the side menu open.
+    TvInitialFocus(playFocusRequester, canFocus = controlsEnabled && !LocalTvMenuOpen.current)
 
     Row(
         modifier = modifier

@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -121,12 +122,44 @@ class TvAppShellFocusTest {
     }
 
     @Test
+    fun `a menu opened while connecting keeps the focus when the controls are ready`() {
+        show()
+        composeTestRule.onNodeWithText("Kitchen Server").requestFocus()
+        setState(AppConnectionState.Connecting("Kitchen Server", "192.168.1.4:8927"))
+
+        // A key in the collapsed menu opens it
+        composeTestRule.onNode(isFocused()).performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+
+        setState(AppConnectionState.Connected("Kitchen Server", "192.168.1.4:8927"))
+        composeTestRule.runOnUiThread { viewModel.updatePlaybackState(false, PlaybackState.READY) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+    }
+
+    @Test
     fun `left from Add Your First Server opens the menu, past a found server below`() {
         show()
         val add = composeTestRule.onNodeWithText("Add Your First Server")
         add.assertIsFocused()
 
         add.performKeyInput { pressKey(Key.DirectionLeft) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Servers").assertIsFocused()
+    }
+
+    @Test
+    // An Arabic locale lays the app out right to left; its strings stay English
+    @Config(qualifiers = "+ar")
+    fun `in a right-to-left layout right from Add Your First Server opens the menu`() {
+        show()
+        val add = composeTestRule.onNodeWithText("Add Your First Server")
+        add.assertIsFocused()
+
+        add.performKeyInput { pressKey(Key.DirectionRight) }
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Servers").assertIsFocused()

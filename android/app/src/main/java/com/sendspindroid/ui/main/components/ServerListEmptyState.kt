@@ -295,14 +295,14 @@ private fun HeroCard(
                     HeroWelcome()
                 }
                 Spacer(modifier = Modifier.width(48.dp))
-                // Nothing on the screen is left of these, so Left goes to the
-                // side menu. A found server's card below, as wide as the
-                // list, would otherwise count as to their left.
+                // Nothing on the screen is between these and the side menu,
+                // so moving toward it goes there. A found server's card below,
+                // as wide as the list, would otherwise count as on that side.
                 val menu = LocalTvMenu.current
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .focusProperties { if (menu != null) left = menu },
+                        .focusProperties { if (menu != null) start = menu },
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     HeroActions(

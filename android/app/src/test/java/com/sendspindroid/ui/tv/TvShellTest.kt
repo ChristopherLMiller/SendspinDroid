@@ -85,6 +85,33 @@ class TvShellTest {
     }
 
     @Test
+    // An Arabic locale lays the app out right to left; its strings stay English
+    @Config(qualifiers = "+ar")
+    fun `in a right-to-left layout right from the screen opens the menu, at the right edge`() {
+        composeTestRule.setContent {
+            SendSpinTheme {
+                TvShell(
+                    home = TvMenuEntry("Now Playing", Icons.Default.PlayArrow),
+                    entries = emptyList(),
+                    footerEntries = emptyList(),
+                    onLeave = {}
+                ) {
+                    Row(modifier = Modifier.padding(start = 320.dp)) {
+                        Button(onClick = {}) { Text("Previous") }
+                        Button(onClick = {}) { Text("Play") }
+                    }
+                }
+            }
+        }
+        composeTestRule.onNodeWithText("Previous").requestFocus()
+
+        composeTestRule.onNodeWithText("Previous").performKeyInput { pressKey(Key.DirectionRight) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+    }
+
+    @Test
     fun `right from the menu returns to the screen`() {
         showShell()
         composeTestRule.onNodeWithText("Play").requestFocus()

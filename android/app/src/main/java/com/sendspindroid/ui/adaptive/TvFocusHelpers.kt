@@ -108,10 +108,11 @@ fun Modifier.tvFocusable(
     .focusable()
 
 /**
- * Requests focus on first composition for TV initial focus.
+ * Requests focus once for TV initial focus: on first composition, or when
+ * [canFocus] first becomes true.
  * Use this to auto-focus the primary control (e.g., Play button) when a TV screen appears.
  *
- * @param focusRequester The FocusRequester to trigger on first composition
+ * @param focusRequester The FocusRequester to request focus on
  * @param canFocus Whether the control can take focus yet. A disabled control
  *   cannot, and the request waits until it can.
  */
