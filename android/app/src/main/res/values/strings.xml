@@ -248,6 +248,7 @@
 
     <!-- Accessibility - Unified Server -->
     <string name="accessibility_connection_local">Local connection available</string>
+    <string name="accessibility_server_options">More options for %1$s</string>
 
     <!-- Default Server -->
     <string name="set_as_default">Set as default</string>

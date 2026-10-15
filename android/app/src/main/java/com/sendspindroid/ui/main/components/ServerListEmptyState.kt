@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.Row
@@ -38,18 +39,29 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.sendspindroid.R
 import com.sendspindroid.model.LocalConnection
 import com.sendspindroid.model.UnifiedServer
+import com.sendspindroid.ui.adaptive.AdaptiveDefaults
+import com.sendspindroid.ui.adaptive.FormFactor
+import com.sendspindroid.ui.adaptive.LocalFormFactor
+import com.sendspindroid.ui.adaptive.tvFocusRing
 import com.sendspindroid.ui.theme.SendSpinTheme
 
 /**
@@ -70,12 +82,21 @@ fun ServerListEmptyState(
     modifier: Modifier = Modifier
 ) {
     val contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp)
+    val isTv = LocalFormFactor.current == FormFactor.TV
+
+    // On a TV, Add Your First Server takes focus when the screen appears.
+    // Once: the hero is a lazy item, composed again when it scrolls back
+    // into view.
+    var addTakesFocus by remember { mutableStateOf(isTv) }
 
     // In landscape the hero card is as tall as the screen, which would leave
     // the servers that were found below the fold with nothing to say they
-    // are there. They go beside it instead.
+    // are there. They go beside it instead. Not on a TV, where the hero is
+    // laid out in two columns that fit the screen: there one structure in
+    // every state keeps its buttons, and focus on them, when the first
+    // server is found.
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    if (isLandscape && discoveredServers.isNotEmpty()) {
+    if (isLandscape && discoveredServers.isNotEmpty() && !isTv) {
         Row(modifier = modifier.fillMaxSize()) {
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -113,7 +134,9 @@ fun ServerListEmptyState(
                 isScanning = isScanning,
                 discoveredCount = discoveredServers.size,
                 onAddServerClick = onAddServerClick,
-                mode = mode
+                mode = mode,
+                addTakesFocus = addTakesFocus,
+                onAddFocused = { addTakesFocus = false }
             )
         }
 
@@ -139,6 +162,8 @@ private fun LazyListScope.discoveredServerItems(
     onQuickConnectClick: (UnifiedServer) -> Unit,
 ) {
     item(key = "quick_connect_header") {
+        val formFactor = LocalFormFactor.current
+        val isTv = formFactor == FormFactor.TV
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -147,12 +172,14 @@ private fun LazyListScope.discoveredServerItems(
             Text(
                 text = stringResource(R.string.welcome_quick_connect),
                 style = MaterialTheme.typography.titleMedium,
+                fontSize = if (isTv) AdaptiveDefaults.bodyTextSize(formFactor) else TextUnit.Unspecified,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = stringResource(R.string.welcome_found_on_network),
                 style = MaterialTheme.typography.bodySmall,
+                fontSize = if (isTv) AdaptiveDefaults.captionTextSize(formFactor) else TextUnit.Unspecified,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -183,7 +210,9 @@ private fun LazyListScope.discoveredServerItems(
                 status = ServerItemStatus.ONLINE,
                 onClick = { onQuickConnectClick(server) },
                 onLongClick = { /* no-op for quick connect */ },
-                onQuickConnectClick = { onQuickConnectClick(server) }
+                onQuickConnectClick = { onQuickConnectClick(server) },
+                // No menu here, so nothing for a More button to open on a TV
+                showMoreButton = false
             )
         }
     }
@@ -191,6 +220,12 @@ private fun LazyListScope.discoveredServerItems(
 
 /**
  * Hero card with welcome message and primary CTA.
+ *
+ * On a TV the welcome and what to do sit side by side, so that the card fits
+ * the height of the screen without scrolling.
+ *
+ * @param addTakesFocus Add Your First Server is to take focus (TV)
+ * @param onAddFocused it has taken it
  */
 @Composable
 private fun HeroCard(
@@ -198,96 +233,176 @@ private fun HeroCard(
     discoveredCount: Int,
     onAddServerClick: () -> Unit,
     mode: ConnectionModeState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    addTakesFocus: Boolean = false,
+    onAddFocused: () -> Unit = {}
 ) {
+    val addFocusRequester = remember { FocusRequester() }
+    if (addTakesFocus) {
+        LaunchedEffect(Unit) {
+            addFocusRequester.requestFocus()
+            onAddFocused()
+        }
+    }
+
     ElevatedCard(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Hero icon with background circle
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(120.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                        shape = CircleShape
-                    )
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_speaker_group),
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Welcome title
-            Text(
-                text = stringResource(R.string.welcome_title),
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Description
-            Text(
-                text = stringResource(R.string.welcome_subtitle),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.widthIn(max = 320.dp)
-            )
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            // Primary CTA — Add Server
-            FilledTonalButton(
-                onClick = onAddServerClick,
+        if (LocalFormFactor.current == FormFactor.TV) {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp)
-                    .widthIn(max = 280.dp),
-                shape = RoundedCornerShape(16.dp)
+                    .padding(32.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_add),
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                Text(
-                    text = stringResource(R.string.welcome_add_first_server),
-                    style = MaterialTheme.typography.labelLarge
-                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    HeroWelcome()
+                }
+                Spacer(modifier = Modifier.width(48.dp))
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    HeroActions(
+                        isScanning = isScanning,
+                        discoveredCount = discoveredCount,
+                        onAddServerClick = onAddServerClick,
+                        mode = mode,
+                        addFocusRequester = addFocusRequester
+                    )
+                }
             }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                HeroWelcome()
 
-            Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(28.dp))
 
-            // Waiting for a server, or searching for one, and the way to
-            // the other.
-            ConnectionModeCard(mode = mode)
-
-            if (mode.searching) {
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Scanning status chip
-                DiscoveryStatusChip(
+                HeroActions(
                     isScanning = isScanning,
-                    discoveredCount = discoveredCount
+                    discoveredCount = discoveredCount,
+                    onAddServerClick = onAddServerClick,
+                    mode = mode,
+                    addFocusRequester = addFocusRequester
                 )
             }
         }
+    }
+}
+
+/** The hero icon, the welcome and what the app is for, laid out in a Column. */
+@Composable
+private fun HeroWelcome() {
+    val formFactor = LocalFormFactor.current
+    val isTv = formFactor == FormFactor.TV
+
+    // Hero icon with background circle
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(120.dp)
+            .background(
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                shape = CircleShape
+            )
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_speaker_group),
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+    }
+
+    Spacer(modifier = Modifier.height(20.dp))
+
+    // Welcome title
+    Text(
+        text = stringResource(R.string.welcome_title),
+        style = if (isTv) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.headlineSmall,
+        color = MaterialTheme.colorScheme.onSurface,
+        textAlign = TextAlign.Center
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Description. A TV is read from across the room.
+    Text(
+        text = stringResource(R.string.welcome_subtitle),
+        style = MaterialTheme.typography.bodyMedium,
+        fontSize = if (isTv) AdaptiveDefaults.bodyTextSize(formFactor) else TextUnit.Unspecified,
+        lineHeight = if (isTv) 28.sp else TextUnit.Unspecified,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.widthIn(max = 320.dp)
+    )
+}
+
+/**
+ * Add Your First Server, the connection mode and the discovery status, laid
+ * out in a Column.
+ */
+@Composable
+private fun HeroActions(
+    isScanning: Boolean,
+    discoveredCount: Int,
+    onAddServerClick: () -> Unit,
+    mode: ConnectionModeState,
+    addFocusRequester: FocusRequester
+) {
+    val formFactor = LocalFormFactor.current
+    val buttonShape = RoundedCornerShape(16.dp)
+
+    // Primary CTA — Add Server
+    FilledTonalButton(
+        onClick = onAddServerClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .widthIn(max = 280.dp)
+            .tvFocusRing(focusRequester = addFocusRequester, shape = buttonShape),
+        shape = buttonShape
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_add),
+            contentDescription = null,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = stringResource(R.string.welcome_add_first_server),
+            style = MaterialTheme.typography.labelLarge,
+            fontSize = if (formFactor == FormFactor.TV) {
+                AdaptiveDefaults.captionTextSize(formFactor)
+            } else {
+                TextUnit.Unspecified
+            }
+        )
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    // Waiting for a server, or searching for one, and the way to
+    // the other.
+    ConnectionModeCard(mode = mode)
+
+    if (mode.searching) {
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Scanning status chip
+        DiscoveryStatusChip(
+            isScanning = isScanning,
+            discoveredCount = discoveredCount
+        )
     }
 }
 
@@ -304,6 +419,13 @@ private fun DiscoveryStatusChip(
     discoveredCount: Int,
     modifier: Modifier = Modifier
 ) {
+    val formFactor = LocalFormFactor.current
+    // A TV is read from across the room; elsewhere the style's own size.
+    val labelSize = if (formFactor == FormFactor.TV) {
+        AdaptiveDefaults.captionTextSize(formFactor)
+    } else {
+        TextUnit.Unspecified
+    }
     when {
         isScanning && discoveredCount == 0 -> {
             // Still scanning, nothing found yet — pulsing alpha animation
@@ -322,7 +444,8 @@ private fun DiscoveryStatusChip(
                 label = {
                     Text(
                         text = stringResource(R.string.welcome_scanning),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = labelSize
                     )
                 },
                 leadingIcon = {
@@ -345,7 +468,8 @@ private fun DiscoveryStatusChip(
                 label = {
                     Text(
                         text = stringResource(R.string.welcome_servers_found, discoveredCount),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = labelSize
                     )
                 },
                 leadingIcon = {
@@ -372,7 +496,8 @@ private fun DiscoveryStatusChip(
                 label = {
                     Text(
                         text = stringResource(R.string.welcome_no_servers_found),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = labelSize
                     )
                 },
                 leadingIcon = {
