@@ -12,7 +12,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
-import androidx.lifecycle.lifecycleScope
 import com.sendspindroid.R
 import com.sendspindroid.UnifiedServerRepository
 import com.sendspindroid.UserSettings
@@ -29,11 +28,10 @@ import com.sendspindroid.ui.wizard.ConnectionTestState
 import com.sendspindroid.ui.wizard.DiscoveredServerUi
 import com.sendspindroid.ui.wizard.WizardStep
 import com.sendspindroid.ui.wizard.WizardStepAction
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+import com.sendspindroid.ui.adaptive.ProvideTvFormFactor
 
 /**
  * Full-screen wizard Activity for adding or editing unified servers.
@@ -106,24 +104,26 @@ class AddServerWizardActivity : AppCompatActivity() {
 
         setContent {
             SendSpinTheme {
-                val state by viewModel.wizardState.collectAsStateWithLifecycle()
+                ProvideTvFormFactor {
+                    val state by viewModel.wizardState.collectAsStateWithLifecycle()
 
-                // Auto-start discovery when entering the FindServer step
-                LaunchedEffect(state.currentStep) {
-                    if (state.currentStep == WizardStep.SS_FindServer && !state.isSearching) {
-                        startDiscovery()
+                    // Auto-start discovery when entering the FindServer step
+                    LaunchedEffect(state.currentStep) {
+                        if (state.currentStep == WizardStep.SS_FindServer && !state.isSearching) {
+                            startDiscovery()
+                        }
                     }
-                }
 
-                AddServerWizardScreen(
-                    state = state,
-                    onClose = { finish() },
-                    onBack = { handleBack() },
-                    onNext = { handleNext() },
-                    onSave = { attemptSave() },
-                    onStepAction = { action -> handleStepAction(action) },
-                    searchAllowed = UserSettings.searchForServers
-                )
+                    AddServerWizardScreen(
+                        state = state,
+                        onClose = { finish() },
+                        onBack = { handleBack() },
+                        onNext = { handleNext() },
+                        onSave = { attemptSave() },
+                        onStepAction = { action -> handleStepAction(action) },
+                        searchAllowed = UserSettings.searchForServers
+                    )
+                }
             }
         }
     }
@@ -255,25 +255,10 @@ class AddServerWizardActivity : AppCompatActivity() {
     // ========================================================================
 
     private fun startLocalConnectionTest() {
-        // Navigate to the testing step
-        if (viewModel.currentStep.value != WizardStep.SS_FindServer) return
-        viewModel.navigateTo(WizardStep.SS_TestLocal)
-
-        lifecycleScope.launch {
-            delay(500) // Brief delay for UI to show
-
-            val result = testLocalConnection(viewModel.localAddress)
-
-            result.fold(
-                onSuccess = { responseCode ->
-                    delay(500) // Brief success display
-                    viewModel.onLocalTestSuccess("Connected (HTTP $responseCode)")
-                },
-                onFailure = { error ->
-                    Log.e(TAG, "Local connection test failed", error)
-                    viewModel.onLocalTestFailed(error.message ?: "Unknown error")
-                }
-            )
+        viewModel.startLocalTest { address ->
+            testLocalConnection(address).onFailure { error ->
+                Log.e(TAG, "Local connection test failed", error)
+            }
         }
     }
 

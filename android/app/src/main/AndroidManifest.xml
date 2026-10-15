@@ -71,6 +71,16 @@
          Note: Only active when user enables "Auto-start on boot" in settings -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Package visibility: lets Settings see which apps take a text share.
+         On a TV the only one may be a stub, and then Report a problem and
+         Export Debug Logs are hidden. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+    </queries>
+
     <!--
         Application Configuration:
         - allowBackup: Enable automatic backup to Google Drive (default: true)

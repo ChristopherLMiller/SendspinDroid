@@ -56,6 +56,7 @@ import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import com.sendspindroid.ui.settings.message
 import com.sendspindroid.model.UnifiedServer
+import com.sendspindroid.model.trackPositionMs
 import com.sendspindroid.network.ConnectionSelector
 import com.sendspindroid.network.DefaultServerPinger
 import com.sendspindroid.ui.server.AddServerWizardActivity
@@ -74,18 +75,19 @@ import com.sendspindroid.ui.main.PlaybackState
 import com.sendspindroid.ui.main.ArtworkSource
 import com.sendspindroid.ui.main.ServerListScreen
 import com.sendspindroid.ui.main.components.ConnectionModeState
+import com.sendspindroid.ui.main.components.SEEK_STEP_MS
 import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
 import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import com.sendspindroid.ui.AppShell
 import com.sendspindroid.ui.adaptive.FormFactor
-import com.sendspindroid.ui.adaptive.LocalFormFactor
+import com.sendspindroid.ui.adaptive.ProvideFormFactor
 import com.sendspindroid.ui.adaptive.determineFormFactor
 import com.sendspindroid.ui.adaptive.isTvDevice
 import com.sendspindroid.ui.theme.SendSpinTheme
@@ -119,8 +121,10 @@ class MainActivity : AppCompatActivity() {
     // Connection state machine - starts with ServerList (shows immediately on startup)
     private var connectionState: AppConnectionState = AppConnectionState.ServerList
 
-    // Track the currently connected server ID for editing
-    private var currentConnectedServerId: String? = null
+    // Track the currently connected server ID for editing: null while not
+    // connected, or connected to a server that dialled in. Compose state, so
+    // the TV menu offers Edit Server only while there is a saved server to edit.
+    private var currentConnectedServerId: String? by mutableStateOf(null)
 
     // NsdManager-based discovery (Android native - more reliable than Go's hashicorp/mdns)
     private var discoveryManager: NsdDiscoveryManager? = null
@@ -322,6 +326,11 @@ class MainActivity : AppCompatActivity() {
         if (isFinishing || isDestroyed) {
             return
         }
+        // On a TV the banner over Now Playing says it already, and an
+        // indefinite snackbar would sit over the transport controls.
+        if (isTvDevice) {
+            return
+        }
 
         // Dismiss any existing reconnecting snackbar
         reconnectingSnackbar?.dismiss()
@@ -452,6 +461,10 @@ class MainActivity : AppCompatActivity() {
             }
             .setCancelable(false)
             .show()
+        // On a TV the field would take focus and open the keyboard over the
+        // dialog. Continue takes it, as a phone shows the dialog: OK keeps
+        // the name, and Up then OK on the field changes it.
+        dialog.focusButtonOnTv(DialogInterface.BUTTON_POSITIVE)
         // Done does what Continue does: with the keyboard up in landscape the
         // dialog's buttons can be out of reach.
         nameField.setOnEditorActionListener { _, actionId, _ ->
@@ -577,13 +590,18 @@ class MainActivity : AppCompatActivity() {
                         .unregisterOnSharedPreferenceChangeListener(listener)
                 }
             }
-            val formFactor = when (layoutModeState.value) {
-                UserSettings.LayoutMode.HEADUNIT -> FormFactor.HEADUNIT
-                UserSettings.LayoutMode.AUTO -> detectedFormFactor
+            // A TV is driven by a remote, which the head-unit touch layout
+            // cannot be used with: the override does not apply there.
+            val formFactor = when {
+                detectedFormFactor == FormFactor.TV -> FormFactor.TV
+                layoutModeState.value == UserSettings.LayoutMode.HEADUNIT -> FormFactor.HEADUNIT
+                else -> detectedFormFactor
             }
 
+            val savedServers by UnifiedServerRepository.savedServers.collectAsStateWithLifecycle()
+
             SendSpinTheme {
-                CompositionLocalProvider(LocalFormFactor provides formFactor) {
+                ProvideFormFactor(formFactor) {
                     AppShell(
                         viewModel = viewModel,
                         serverListContent = {
@@ -636,7 +654,11 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         },
-                        onExitAppClick = { onExitAppClicked() }
+                        onExitAppClick = { onExitAppClicked() },
+                        canEditServer = savedServers.any { it.id == currentConnectedServerId },
+                        // As Android 12 and later do for the launcher's activity: the
+                        // app keeps its state and keeps playing.
+                        onLeaveApp = { moveTaskToBack(true) }
                     )
                 }
             }
@@ -1232,7 +1254,10 @@ class MainActivity : AppCompatActivity() {
                     is AppConnectionState.Reconnecting -> currentState.serverAddress
                     // A server connected to us: there is no saved server
                     // behind the connection.
-                    is AppConnectionState.ServerList -> ""
+                    is AppConnectionState.ServerList -> {
+                        currentConnectedServerId = null
+                        ""
+                    }
                     else -> {
                         Log.w(TAG, "STATE_CONNECTED received in unexpected state: $currentState, using serverId fallback")
                         currentConnectedServerId ?: ""
@@ -1283,6 +1308,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d(TAG, "Disconnected from server")
 
                 connectionState = AppConnectionState.ServerList
+                currentConnectedServerId = null
                 // Sync state to ViewModel for Compose UI
                 viewModel.updateConnectionState(connectionState)
                 viewModel.resetPlaybackState()
@@ -1295,6 +1321,7 @@ class MainActivity : AppCompatActivity() {
                 Log.e(TAG, "Connection error: $errorMessage")
 
                 connectionState = AppConnectionState.Error(errorMessage)
+                currentConnectedServerId = null
                 // Sync state to ViewModel for Compose UI
                 viewModel.updateConnectionState(connectionState)
                 showServerListView()
@@ -1626,6 +1653,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
+                    .focusButtonOnTv(DialogInterface.BUTTON_NEGATIVE)
             }
         }
 
@@ -1695,6 +1723,22 @@ class MainActivity : AppCompatActivity() {
     private fun onSeekRequested(positionMs: Long) {
         Log.d(TAG, "Seek requested: $positionMs ms")
         mediaController?.seekTo(positionMs)
+    }
+
+    /**
+     * Seeks [deltaMs] from the position Now Playing shows, for the remote's
+     * fast-forward and rewind keys.
+     */
+    private fun seekBy(deltaMs: Long) {
+        val durationMs = viewModel.durationMs.value
+        if (durationMs <= 0) return
+        val shownMs = trackPositionMs(
+            anchorPositionMs = viewModel.positionMs.value,
+            elapsedMs = SystemClock.elapsedRealtime() - viewModel.positionUpdatedAt.value,
+            playbackSpeed = viewModel.playbackSpeed.value,
+            durationMs = durationMs
+        )
+        onSeekRequested((shownMs + deltaMs).coerceIn(0L, durationMs))
     }
 
     /**
@@ -1772,6 +1816,7 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.disconnect_dialog_negative, null)
             .show()
+            .focusButtonOnTv(DialogInterface.BUTTON_NEGATIVE)
     }
 
     /**
@@ -1817,6 +1862,16 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.disconnect_dialog_negative, null)
             .show()
+            .focusButtonOnTv(DialogInterface.BUTTON_NEGATIVE)
+    }
+
+    /**
+     * On a TV, starts a dialog with focus on one of its buttons, [which]: a
+     * confirmation on Cancel. Without it a dialog focuses its message, which
+     * shows nothing, so the first press of OK seems to do nothing.
+     */
+    private fun androidx.appcompat.app.AlertDialog.focusButtonOnTv(which: Int) {
+        if (isTvDevice) getButton(which)?.requestFocus()
     }
 
     /**
@@ -1939,39 +1994,77 @@ class MainActivity : AppCompatActivity() {
      * Handles key events from TV remotes and D-pad controllers.
      *
      * Media keys (play/pause, next, previous) are handled when connected to a server.
-     * On TV devices, volume up/down keys adjust the app volume slider instead of
-     * system volume, providing a more intuitive experience.
+     * On TV devices, fast-forward and rewind seek when the server offers it, and
+     * volume up/down keys adjust the app volume slider instead of system volume,
+     * providing a more intuitive experience.
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        // Holding a key repeats it, and each repeat would be another command
+        // to the server: only the first press of a transport key acts. The
+        // repeats are still consumed, so nothing else acts on them either.
+        val firstPress = (event?.repeatCount ?: 0) == 0
+
         // Handle media keys when connected to a server
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPlayPauseClicked()
+                    if (firstPress) onPlayPauseClicked()
                     return true
                 }
             }
+            // PLAY and PAUSE are not toggles: a CEC remote sends PLAY for its
+            // Play button while the music plays, too. playWhenReady rather than
+            // isPlaying, so a pause also stops a stream that is still starting.
             KeyEvent.KEYCODE_MEDIA_PLAY -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPlayPauseClicked()
+                    val controller = mediaController
+                    if (firstPress && controller != null && !controller.playWhenReady) {
+                        Log.d(TAG, "Play key")
+                        controller.play()
+                    }
                     return true
                 }
             }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPlayPauseClicked()
+                    val controller = mediaController
+                    if (firstPress && controller != null && controller.playWhenReady) {
+                        Log.d(TAG, "Pause key")
+                        controller.pause()
+                    }
                     return true
                 }
             }
             KeyEvent.KEYCODE_MEDIA_NEXT -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onNextClicked()
+                    if (firstPress) onNextClicked()
                     return true
                 }
             }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                 if (connectionState is AppConnectionState.Connected) {
-                    onPreviousClicked()
+                    if (firstPress) onPreviousClicked()
+                    return true
+                }
+            }
+            // A relative seek where the server offers one: it moves from the
+            // server's own position, so presses quicker than its answer add up,
+            // and it works on a stream with no absolute seek. Otherwise from
+            // the position shown.
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                val forward = keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                val controller = mediaController
+                val relative = controller?.isCommandAvailable(
+                    if (forward) Player.COMMAND_SEEK_FORWARD else Player.COMMAND_SEEK_BACK
+                ) == true
+                if (isTvDevice && connectionState is AppConnectionState.Connected && (relative || viewModel.seekable.value)) {
+                    if (firstPress) {
+                        when {
+                            relative && forward -> controller?.seekForward()
+                            relative -> controller?.seekBack()
+                            else -> seekBy(if (forward) SEEK_STEP_MS else -SEEK_STEP_MS)
+                        }
+                    }
                     return true
                 }
             }

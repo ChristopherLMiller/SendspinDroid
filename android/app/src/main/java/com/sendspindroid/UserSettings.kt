@@ -584,12 +584,21 @@ object UserSettings {
         set(value) { prefs?.edit()?.putString(KEY_LAYOUT_MODE, value.name)?.apply() }
 
     /**
-     * Light/dark theme override. SYSTEM follows the device setting.
+     * Light/dark theme override. SYSTEM follows the device setting, except on
+     * a TV, where it means dark (see [nightMode]).
      */
-    enum class ThemeMode(val nightMode: Int) {
+    enum class ThemeMode(private val nightMode: Int) {
         SYSTEM(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM),
         LIGHT(AppCompatDelegate.MODE_NIGHT_NO),
-        DARK(AppCompatDelegate.MODE_NIGHT_YES)
+        DARK(AppCompatDelegate.MODE_NIGHT_YES);
+
+        /**
+         * The AppCompat night mode for this choice. A TV reports light mode
+         * unless told otherwise, and a light screen glares across a room, so
+         * there SYSTEM means dark.
+         */
+        fun nightMode(isTv: Boolean): Int =
+            if (isTv && this == SYSTEM) AppCompatDelegate.MODE_NIGHT_YES else nightMode
     }
 
     var themeMode: ThemeMode
