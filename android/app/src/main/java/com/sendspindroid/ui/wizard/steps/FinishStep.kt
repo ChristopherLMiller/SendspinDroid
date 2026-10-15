@@ -38,7 +38,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import com.sendspindroid.ui.wizard.keepVisibleWhenFocused
-import com.sendspindroid.ui.wizard.rememberTvKeyboardGate
+import com.sendspindroid.ui.adaptive.rememberTvKeyboardGate
 
 /**
  * Final wizard step — name the server, set as default, and show a summary

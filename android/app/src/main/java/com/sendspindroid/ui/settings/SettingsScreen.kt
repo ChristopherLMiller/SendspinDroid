@@ -52,13 +52,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -78,6 +76,8 @@ import com.sendspindroid.logging.LogLevel
 import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.adaptive.TvInitialFocus
+import com.sendspindroid.ui.adaptive.TvKeyboardGate
+import com.sendspindroid.ui.adaptive.rememberTvKeyboardGate
 import com.sendspindroid.ui.adaptive.TvOverscanHorizontal
 import com.sendspindroid.ui.adaptive.TvOverscanVertical
 import com.sendspindroid.ui.adaptive.tvFocusable
@@ -969,13 +969,8 @@ private fun SyncOffsetDialog(
  * dialog's initial focus. Done does what the dialog's OK does: with the
  * keyboard up in landscape the dialog's buttons can be out of reach.
  *
- * A focused text field opens the keyboard at once, and on a TV the keyboard
- * covers the dialog's OK and Cancel. This OutlinedTextField ignores
- * KeyboardOptions.showKeyboardOnFocus (only a TextFieldState text field reads
- * it, and Material3 1.3 has no OutlinedTextField for one), but a read-only
- * text field opens no keyboard, and one made editable while focused opens it.
- * So on a TV the field is read-only until OK is pressed on it, and again once
- * focus leaves it.
+ * On a TV the keyboard waits for OK on the field ([TvKeyboardGate]), or it
+ * would cover the dialog's OK and Cancel as soon as the dialog opens.
  */
 @Composable
 private fun DialogTextField(
@@ -985,8 +980,7 @@ private fun DialogTextField(
     onDone: () -> Unit,
     suffix: @Composable (() -> Unit)? = null
 ) {
-    val isTv = LocalFormFactor.current == FormFactor.TV
-    var typing by remember { mutableStateOf(!isTv) }
+    val keyboardGate = rememberTvKeyboardGate()
     val focusRequester = remember { FocusRequester() }
 
     OutlinedTextField(
@@ -995,16 +989,10 @@ private fun DialogTextField(
         modifier = Modifier
             .fillMaxWidth()
             .focusRequester(focusRequester)
-            .onFocusChanged { if (isTv && !it.isFocused) typing = false }
-            .onPreviewKeyEvent { event ->
-                val ok = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
-                val opensKeyboard = ok && !typing
-                if (opensKeyboard && event.type == KeyEventType.KeyUp) typing = true
-                opensKeyboard
-            },
+            .then(keyboardGate.modifier),
         label = { Text(label) },
         suffix = suffix,
-        readOnly = !typing,
+        readOnly = keyboardGate.readOnly,
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { onDone() })

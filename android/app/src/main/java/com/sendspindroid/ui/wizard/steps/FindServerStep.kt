@@ -58,7 +58,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import com.sendspindroid.ui.wizard.keepVisibleWhenFocused
-import com.sendspindroid.ui.wizard.rememberTvKeyboardGate
+import com.sendspindroid.ui.adaptive.rememberTvKeyboardGate
 
 /**
  * Find server step - discover servers via mDNS or enter address manually.

@@ -1,4 +1,4 @@
-package com.sendspindroid.ui.wizard
+package com.sendspindroid.ui.adaptive
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
@@ -13,15 +13,14 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import com.sendspindroid.ui.adaptive.FormFactor
-import com.sendspindroid.ui.adaptive.LocalFormFactor
 
 /**
  * Holds a text field's keyboard back on a TV until OK is pressed on it.
  *
  * A text field opens the keyboard as soon as it takes focus, and on a TV the
- * D-pad passes focus through a field on its way to other controls, so the
- * keyboard would cover the screen each time. KeyboardOptions has a
+ * D-pad passes focus through a field on its way to other controls, or a
+ * dialog starts on its field, so the keyboard would cover the screen each
+ * time. KeyboardOptions has a
  * showKeyboardOnFocus switch for this, but the text fields that take a String
  * value do not honour it. A read-only field opens no keyboard, so there the
  * field is read-only until OK is pressed on it, and again once focus leaves.
