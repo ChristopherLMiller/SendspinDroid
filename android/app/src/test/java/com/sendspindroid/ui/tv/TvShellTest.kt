@@ -9,7 +9,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
@@ -18,7 +22,6 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
-import com.sendspindroid.ui.adaptive.TvOverscanHorizontal
 import com.sendspindroid.ui.theme.SendSpinTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -31,10 +34,13 @@ import org.robolectric.annotation.Config
  * The TV side menu is driven by a remote alone: Left from the screen, Back or
  * Menu opens it on the screen's own entry, Right and its entries return to the
  * screen, and Back in it leaves.
+ *
+ * The screen here is a Previous and a Play button side by side, so the menu,
+ * at the left edge, returns to Previous: the nearest control.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], qualifiers = "w960dp-h540dp-land")
 class TvShellTest {
 
     @get:Rule
@@ -52,8 +58,9 @@ class TvShellTest {
                     footerEntries = listOf(TvMenuEntry("Settings", Icons.Default.Settings)),
                     onLeave = { left++ }
                 ) {
-                    // Screens keep the TV side margin themselves
-                    Row(modifier = Modifier.padding(horizontal = TvOverscanHorizontal)) {
+                    // Past the open menu's edge, as the controls of the
+                    // app's screens are
+                    Row(modifier = Modifier.padding(start = 320.dp)) {
                         Button(onClick = {}) { Text("Previous") }
                         Button(onClick = {}) { Text("Play") }
                     }
@@ -79,11 +86,40 @@ class TvShellTest {
     }
 
     @Test
-    fun `right from the menu returns to what had focus on the screen`() {
+    fun `right from the menu returns to the screen`() {
         showShell()
         composeTestRule.onNodeWithText("Play").requestFocus()
         pressBack()
         composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+
+        composeTestRule.onNodeWithText("Now Playing").performKeyInput { pressKey(Key.DirectionRight) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Previous").assertIsFocused()
+    }
+
+    @Test
+    fun `right from the menu lands on the screen when what had focus there is gone`() {
+        var showPrevious by mutableStateOf(true)
+        composeTestRule.setContent {
+            SendSpinTheme {
+                TvShell(
+                    home = TvMenuEntry("Now Playing", Icons.Default.PlayArrow),
+                    entries = emptyList(),
+                    footerEntries = emptyList(),
+                    onLeave = {}
+                ) {
+                    Row(modifier = Modifier.padding(start = 320.dp)) {
+                        if (showPrevious) Button(onClick = {}) { Text("Previous") }
+                        Button(onClick = {}) { Text("Play") }
+                    }
+                }
+            }
+        }
+        composeTestRule.onNodeWithText("Previous").requestFocus()
+        pressBack()
+        showPrevious = false
+        composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Now Playing").performKeyInput { pressKey(Key.DirectionRight) }
         composeTestRule.waitForIdle()
@@ -102,7 +138,7 @@ class TvShellTest {
 
         pressBack()
         assertEquals(1, left)
-        composeTestRule.onNodeWithText("Play").assertIsFocused()
+        composeTestRule.onNodeWithText("Previous").assertIsFocused()
     }
 
     @Test
@@ -129,6 +165,6 @@ class TvShellTest {
         composeTestRule.waitForIdle()
 
         assertEquals(1, stats)
-        composeTestRule.onNodeWithText("Play").assertIsFocused()
+        composeTestRule.onNodeWithText("Previous").assertIsFocused()
     }
 }

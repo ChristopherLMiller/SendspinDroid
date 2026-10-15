@@ -1639,6 +1639,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
+                    .focusButtonOnTv(DialogInterface.BUTTON_NEGATIVE)
             }
         }
 

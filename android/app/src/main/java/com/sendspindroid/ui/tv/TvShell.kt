@@ -21,10 +21,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -34,6 +34,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.DrawerValue
 import androidx.tv.material3.Icon
@@ -63,7 +64,7 @@ class TvMenuEntry(
  * screen, behind a scrim, as soon as it takes focus: D-pad Left from the
  * screen's left edge, the Back key, or a remote's Menu key. It opens on
  * [home], the entry for the screen being shown. D-pad Right, or choosing
- * [home], closes it and returns focus to where it was on the screen. Any
+ * [home], closes it, with focus on the nearest control of the screen. Any
  * other entry closes it before it acts, so focus is back on the screen when
  * a dialog or another screen it opens is closed. Back in the open menu calls
  * [onLeave].
@@ -88,9 +89,12 @@ fun TvShell(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val menuOpen = drawerState.currentValue == DrawerValue.Open
     val homeEntry = remember { FocusRequester() }
-    val screen = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
     val openMenu = { homeEntry.requestFocus() }
-    val closeMenu = { screen.requestFocus() }
+    // As D-pad Right does. Restoring what had focus on the screen is not
+    // reliable in Compose 1.7: restored into a lazy list, the focus can end up
+    // on the list itself, with nothing focused that the user can see.
+    val closeMenu: () -> Unit = { focusManager.moveFocus(FocusDirection.Right) }
 
     // When a screen focuses nothing of its own, the platform gives focus to
     // the first entry of the menu before the drawer follows its focus, and
@@ -123,13 +127,6 @@ fun TvShell(
                         .fillMaxHeight()
                         .background(if (value == DrawerValue.Open) menuBackground else Color.Transparent)
                         .padding(horizontal = RailPadding, vertical = TvOverscanVertical)
-                        // Right goes back to what had focus on the screen. A
-                        // plain D-pad move would pick whatever is nearest.
-                        .onPreviewKeyEvent { event ->
-                            val right = event.key == Key.DirectionRight
-                            if (right && event.type == KeyEventType.KeyDown) closeMenu()
-                            right
-                        }
                         .onFocusChanged { menuHasFocus = it.hasFocus }
                         .focusProperties { enter = { homeEntry } }
                         .focusGroup()
@@ -156,9 +153,6 @@ fun TvShell(
                     if (menuKey && event.type == KeyEventType.KeyDown) openMenu()
                     menuKey
                 }
-                .focusRequester(screen)
-                // Coming back from the menu returns to what had focus here
-                .focusRestorer()
                 .focusGroup()
         ) {
             content()
