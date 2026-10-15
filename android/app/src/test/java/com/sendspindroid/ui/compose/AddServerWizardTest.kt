@@ -275,7 +275,7 @@ class AddServerWizardTest {
     }
 
     @Test
-    fun `system Back while testing goes back too, which cancels the test`() {
+    fun `system Back while testing goes back too`() {
         var backs = 0
         showWizard(WizardState(currentStep = WizardStep.SS_TestLocal), onBack = { backs++ })
 
