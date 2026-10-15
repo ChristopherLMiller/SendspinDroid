@@ -52,11 +52,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -900,25 +902,16 @@ private fun PlayerNameDialog(
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf(currentName) }
-    val initialFocus = remember { FocusRequester() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.pref_player_name_title)) },
         text = {
-            TvInitialFocus(initialFocus)
-            OutlinedTextField(
+            DialogTextField(
                 value = name,
                 onValueChange = { name = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(initialFocus),
-                label = { Text(stringResource(R.string.pref_player_name_title)) },
-                singleLine = true,
-                // Done does what OK does: with the keyboard up in landscape
-                // the dialog's buttons can be out of reach.
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { onConfirm(name) })
+                label = stringResource(R.string.pref_player_name_title),
+                onDone = { onConfirm(name) }
             )
         },
         confirmButton = {
@@ -941,26 +934,17 @@ private fun SyncOffsetDialog(
     onDismiss: () -> Unit
 ) {
     var offsetText by remember { mutableStateOf(currentOffset.toString()) }
-    val initialFocus = remember { FocusRequester() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.pref_sync_offset_dialog_title)) },
         text = {
-            TvInitialFocus(initialFocus)
-            OutlinedTextField(
+            DialogTextField(
                 value = offsetText,
                 onValueChange = { offsetText = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(initialFocus),
-                label = { Text(stringResource(R.string.pref_sync_offset_title)) },
-                singleLine = true,
-                suffix = { Text("ms") },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(
-                    onDone = { offsetText.toIntOrNull()?.let { onConfirm(it) } }
-                )
+                label = stringResource(R.string.pref_sync_offset_title),
+                onDone = { offsetText.toIntOrNull()?.let { onConfirm(it) } },
+                suffix = { Text("ms") }
             )
         },
         confirmButton = {
@@ -978,6 +962,56 @@ private fun SyncOffsetDialog(
             }
         }
     )
+}
+
+/**
+ * The text field of the player name and sync offset dialogs, and on a TV the
+ * dialog's initial focus. Done does what the dialog's OK does: with the
+ * keyboard up in landscape the dialog's buttons can be out of reach.
+ *
+ * A focused text field opens the keyboard at once, and on a TV the keyboard
+ * covers the dialog's OK and Cancel. This OutlinedTextField ignores
+ * KeyboardOptions.showKeyboardOnFocus (only a TextFieldState text field reads
+ * it, and Material3 1.3 has no OutlinedTextField for one), but a read-only
+ * text field opens no keyboard, and one made editable while focused opens it.
+ * So on a TV the field is read-only until OK is pressed on it, and again once
+ * focus leaves it.
+ */
+@Composable
+private fun DialogTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    onDone: () -> Unit,
+    suffix: @Composable (() -> Unit)? = null
+) {
+    val isTv = LocalFormFactor.current == FormFactor.TV
+    var typing by remember { mutableStateOf(!isTv) }
+    val focusRequester = remember { FocusRequester() }
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester)
+            .onFocusChanged { if (isTv && !it.isFocused) typing = false }
+            .onPreviewKeyEvent { event ->
+                val ok = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
+                val opensKeyboard = ok && !typing
+                if (opensKeyboard && event.type == KeyEventType.KeyUp) typing = true
+                opensKeyboard
+            },
+        label = { Text(label) },
+        suffix = suffix,
+        readOnly = !typing,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { onDone() })
+    )
+    // After the field: focused before it has finished setting up, the field
+    // would open the keyboard, read-only or not.
+    TvInitialFocus(focusRequester)
 }
 
 @Composable

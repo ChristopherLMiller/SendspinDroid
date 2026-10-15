@@ -2,7 +2,9 @@ package com.sendspindroid.ui.settings
 
 import android.app.Application
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -10,7 +12,6 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasAnyDescendant
-import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocusable
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -26,6 +27,7 @@ import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.theme.SendSpinTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,18 +50,32 @@ class SettingsScreenTvTest {
 
     private val radioButton = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
 
+    // Not hasSetTextAction(): on a TV the field is read-only until OK, which leaves out SetText.
+    private val textField = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
+
+    /** Input sessions started by the screen's text fields: each one opens the keyboard. */
+    private var keyboardsOpened = 0
+
+    @OptIn(ExperimentalComposeUiApi::class)
     private fun show(formFactor: FormFactor, canShare: Boolean = true) {
         composeTestRule.setContent {
-            CompositionLocalProvider(LocalFormFactor provides formFactor) {
-                SendSpinTheme {
-                    SettingsScreen(
-                        viewModel = viewModel,
-                        onNavigateBack = {},
-                        onExportLogs = {},
-                        onReportProblem = {},
-                        onRestartApp = {},
-                        canShare = canShare
-                    )
+            InterceptPlatformTextInput(
+                interceptor = { request, nextHandler ->
+                    keyboardsOpened++
+                    nextHandler.startInputMethod(request)
+                }
+            ) {
+                CompositionLocalProvider(LocalFormFactor provides formFactor) {
+                    SendSpinTheme {
+                        SettingsScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = {},
+                            onExportLogs = {},
+                            onReportProblem = {},
+                            onRestartApp = {},
+                            canShare = canShare
+                        )
+                    }
                 }
             }
         }
@@ -116,7 +132,8 @@ class SettingsScreenTvTest {
         row.performKeyInput { pressKey(Key.DirectionCenter) }
 
         composeTestRule.onNodeWithText("Sync Offset (ms)").assertExists()
-        composeTestRule.onNode(hasSetTextAction()).assertIsFocused()
+        composeTestRule.onNode(textField).assertIsFocused()
+        assertEquals(0, keyboardsOpened)
     }
 
     @Test
@@ -165,7 +182,37 @@ class SettingsScreenTvTest {
         composeTestRule.onNodeWithText("Player Name")
             .performKeyInput { pressKey(Key.DirectionCenter) }
 
-        composeTestRule.onNode(hasSetTextAction()).assertIsFocused()
+        composeTestRule.onNode(textField).assertIsFocused()
+    }
+
+    @Test
+    @Config(qualifiers = DIALOG_TEXT_FIELD_SCREEN)
+    fun `on a TV the dialog's text field opens the keyboard on OK, not on focus`() {
+        show(FormFactor.TV)
+        composeTestRule.onNodeWithText("Player Name")
+            .performKeyInput { pressKey(Key.DirectionCenter) }
+        val field = composeTestRule.onNode(textField)
+        field.assertIsFocused()
+        // The keyboard would cover the dialog's OK and Cancel.
+        assertEquals(0, keyboardsOpened)
+
+        field.performKeyInput { pressKey(Key.DirectionCenter) }
+        composeTestRule.waitForIdle()
+
+        assertTrue(keyboardsOpened > 0)
+        field.assertIsFocused()
+    }
+
+    @Test
+    @Config(qualifiers = DIALOG_TEXT_FIELD_SCREEN)
+    fun `on a phone the dialog's text field opens the keyboard when it takes focus`() {
+        show(FormFactor.PHONE)
+        composeTestRule.onNodeWithText("Player Name").performClick()
+
+        composeTestRule.onNode(textField).performClick()
+        composeTestRule.waitForIdle()
+
+        assertTrue(keyboardsOpened > 0)
     }
 
     @Test
