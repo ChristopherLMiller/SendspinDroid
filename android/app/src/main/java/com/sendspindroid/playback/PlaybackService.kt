@@ -250,6 +250,32 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    // The player name changed in settings. The server only learns a name from
+    // client/hello ("the client/hello value is authoritative", connection.md),
+    // so the dial client and the mDNS announcement take the new one, and a
+    // live connection is made again ("restart": the server reconnects too).
+    // Server-initiated connections read the name when they are made.
+    private val playerNameReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val name = UserSettings.getPlayerName()
+            if (name == appliedPlayerName) return
+            appliedPlayerName = name
+            Log.i(TAG, "Player name changed to '$name'")
+            dialClient?.setDeviceName(name)
+            val port = _advertisedPort.value
+            val advertising = advertiser
+            if (port != null && advertising != null) {
+                advertising.start(name, port, SendspinWebSocketServer.DEFAULT_PATH)
+            }
+            if (sendSpinClient?.connectionState?.value is TransportState.Ready) {
+                sendSpinClient?.disconnectForReselection()
+            }
+        }
+    }
+
+    // The player name the clients and the announcement were last given
+    private var appliedPlayerName: String? = null
+
     // Flag to prevent callbacks from executing after service is destroyed
     @Volatile
     private var isDestroyed = false
@@ -624,6 +650,10 @@ class PlaybackService : MediaLibraryService() {
         LocalBroadcastManager.getInstance(this).registerReceiver(
             preferredCodecReceiver,
             IntentFilter(SettingsViewModel.ACTION_PREFERRED_CODEC_CHANGED)
+        )
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+            playerNameReceiver,
+            IntentFilter(SettingsViewModel.ACTION_PLAYER_NAME_CHANGED)
         )
 
         // Initialize Coil ImageLoader for artwork fetching (skip in low memory mode)
@@ -1130,6 +1160,7 @@ class PlaybackService : MediaLibraryService() {
             pairingGestureRequested = false
             // Use user-configured player name, falls back to device model
             val playerName = com.sendspindroid.UserSettings.getPlayerName()
+            appliedPlayerName = playerName
             dialClient = SendSpin(
                 deviceName = playerName,
                 callback = SendSpinClientCallback(),
@@ -3517,6 +3548,7 @@ class PlaybackService : MediaLibraryService() {
         // Unregister High Power Mode receiver and release locks
         LocalBroadcastManager.getInstance(this).unregisterReceiver(highPowerModeReceiver)
         LocalBroadcastManager.getInstance(this).unregisterReceiver(preferredCodecReceiver)
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(playerNameReceiver)
         releaseHighPowerLocks()
 
         // Let the final releasePlaybackLocks() abandon focus even mid-interruption
