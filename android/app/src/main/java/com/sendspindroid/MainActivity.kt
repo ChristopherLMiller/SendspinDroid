@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.DialogInterface
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
@@ -22,6 +23,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,6 +32,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -37,10 +40,13 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import com.sendspindroid.discovery.DiscoveryGate
 import com.sendspindroid.discovery.NsdDiscoveryManager
+import com.sendspindroid.ui.settings.SettingsViewModel
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import com.sendspindroid.coordinator.ReconnectStatus
@@ -371,7 +377,10 @@ class MainActivity : AppCompatActivity() {
         // showSearchingView() which starts auto-discovery
         initializeDiscoveryManager()
         initializeDefaultServerPinger()
-        initializeMediaController()
+        // The controller binds PlaybackService, which advertises the player
+        // as soon as it is created: on the first run the user names it in
+        // the welcome first, and Continue builds the controller.
+        if (prefs.getBoolean(PREF_ONBOARDING_SHOWN, false)) initializeMediaController()
         setupUI()
 
         // Install the Compose shell as the content view
@@ -408,22 +417,62 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Shows the onboarding dialog if this is the user's first launch.
-     * Uses SharedPreferences to track if the dialog has been shown.
+     * Shows the welcome dialog if this is the user's first launch, with the
+     * player's name to change before any server can see it. Continue builds
+     * the MediaController, and so starts PlaybackService.
      */
     private fun showOnboardingIfNeeded() {
-        if (!prefs.getBoolean(PREF_ONBOARDING_SHOWN, false)) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.onboarding_title)
-                .setMessage(R.string.onboarding_message)
-                .setPositiveButton(R.string.onboarding_got_it) { dialog, _ ->
-                    // Mark onboarding as shown
-                    prefs.edit().putBoolean(PREF_ONBOARDING_SHOWN, true).apply()
-                    dialog.dismiss()
-                }
-                .setCancelable(false)
-                .show()
+        if (prefs.getBoolean(PREF_ONBOARDING_SHOWN, false)) return
+        val nameLayout = TextInputLayout(
+            this, null, com.google.android.material.R.attr.textInputOutlinedStyle
+        ).apply {
+            hint = getString(R.string.pref_player_name_title)
         }
+        // Made with the layout's context, which carries the outlined style's
+        // theme overlay: with the activity's, the field keeps an underline.
+        val nameField = TextInputEditText(nameLayout.context).apply {
+            setText(UserSettings.getPlayerName())
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+        nameLayout.addView(nameField)
+        // A dialog's custom view gets no inset of its own: line it up with
+        // the message.
+        val inset = (24 * resources.displayMetrics.density).toInt()
+        val content = FrameLayout(this).apply {
+            setPadding(inset, 0, inset, 0)
+            addView(nameLayout)
+        }
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.onboarding_title)
+            .setMessage(R.string.onboarding_message)
+            .setView(content)
+            .setPositiveButton(R.string.onboarding_continue) { _, _ ->
+                onWelcomeConfirmed(nameField.text.toString())
+            }
+            .setCancelable(false)
+            .show()
+        // Done does what Continue does: with the keyboard up in landscape the
+        // dialog's buttons can be out of reach.
+        nameField.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId != EditorInfo.IME_ACTION_DONE) return@setOnEditorActionListener false
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+            true
+        }
+    }
+
+    /** The user named the player and pressed Continue. */
+    private fun onWelcomeConfirmed(name: String) {
+        // Continue pressed twice (a remote's OK, Done and a tap) is queued
+        // twice: a second controller would replace the one being connected.
+        if (prefs.getBoolean(PREF_ONBOARDING_SHOWN, false)) return
+        UserSettings.setPlayerName(name)
+        prefs.edit().putBoolean(PREF_ONBOARDING_SHOWN, true).apply()
+        // A service Android Auto started already advertises: it takes the
+        // name the way it takes a rename in Settings.
+        LocalBroadcastManager.getInstance(this)
+            .sendBroadcast(Intent(SettingsViewModel.ACTION_PLAYER_NAME_CHANGED))
+        initializeMediaController()
     }
 
     /**
