@@ -33,6 +33,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -79,6 +80,7 @@ fun TrackProgressBar(
     val shownPositionMs = seek.positionMs ?: displayPositionMs
     val barColor = accentColor ?: MaterialTheme.colorScheme.primary
     val barDescription = stringResource(R.string.track_position)
+    val focusManager = LocalFocusManager.current
 
     Column(modifier = modifier.fillMaxWidth()) {
         if (seekable) {
@@ -98,7 +100,8 @@ fun TrackProgressBar(
                 valueRange = 0f..durationMs.toFloat(),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .semantics { contentDescription = barDescription },
+                    .semantics { contentDescription = barDescription }
+                    .upDownMovesFocus(focusManager),
                 colors = SliderDefaults.colors(
                     thumbColor = barColor,
                     activeTrackColor = barColor,

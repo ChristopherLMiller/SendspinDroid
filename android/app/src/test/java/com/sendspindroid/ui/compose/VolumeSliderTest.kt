@@ -1,14 +1,28 @@
 package com.sendspindroid.ui.compose
 
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pressKey
+import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeLeft
+import com.sendspindroid.ui.adaptive.FormFactor
+import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.main.components.VolumeSlider
 import com.sendspindroid.ui.theme.SendSpinTheme
 import org.junit.Assert.assertEquals
@@ -113,5 +127,56 @@ class VolumeSliderTest {
 
         // Verify internal state was updated
         assertEquals(0.8f, currentVolume, 0.01f)
+    }
+
+    private var volume by mutableFloatStateOf(0.5f)
+
+    /** The slider between two buttons, on a phone driven by a keyboard or D-pad. */
+    private fun setSliderBetweenButtons() {
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalFormFactor provides FormFactor.PHONE) {
+                SendSpinTheme {
+                    Column {
+                        Button(onClick = {}) { Text("Above") }
+                        VolumeSlider(volume = volume, onVolumeChange = { volume = it })
+                        Button(onClick = {}) { Text("Below") }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun slider() =
+        composeTestRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
+
+    @Test
+    fun volumeSlider_upAndDown_moveFocusOff_withoutChangingTheVolume() {
+        setSliderBetweenButtons()
+
+        slider().requestFocus()
+        slider().performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.onNodeWithText("Below").assertIsFocused()
+        assertEquals(0.5f, volume, 0f)
+
+        slider().requestFocus()
+        slider().performKeyInput { pressKey(Key.DirectionUp) }
+        composeTestRule.onNodeWithText("Above").assertIsFocused()
+        assertEquals(0.5f, volume, 0f)
+    }
+
+    @Test
+    fun volumeSlider_leftAndRight_stillStepTheVolume() {
+        setSliderBetweenButtons()
+
+        slider().requestFocus()
+        slider().performKeyInput { pressKey(Key.DirectionRight) }
+        composeTestRule.waitForIdle()
+        assertEquals(0.51f, volume, 0.001f)
+
+        slider().performKeyInput { pressKey(Key.DirectionLeft) }
+        slider().performKeyInput { pressKey(Key.DirectionLeft) }
+        composeTestRule.waitForIdle()
+        assertEquals(0.49f, volume, 0.001f)
+        slider().assertIsFocused()
     }
 }
