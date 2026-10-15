@@ -371,7 +371,10 @@ class MainActivity : AppCompatActivity() {
         // showSearchingView() which starts auto-discovery
         initializeDiscoveryManager()
         initializeDefaultServerPinger()
-        initializeMediaController()
+        // The controller binds PlaybackService, which advertises the player
+        // as soon as it is created: on the first run the user names it in
+        // the welcome first, and Continue builds the controller.
+        if (prefs.getBoolean(PREF_ONBOARDING_SHOWN, false)) initializeMediaController()
         setupUI()
 
         // Install the Compose shell as the content view
@@ -419,6 +422,7 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton(R.string.onboarding_got_it) { dialog, _ ->
                     // Mark onboarding as shown
                     prefs.edit().putBoolean(PREF_ONBOARDING_SHOWN, true).apply()
+                    initializeMediaController()
                     dialog.dismiss()
                 }
                 .setCancelable(false)
