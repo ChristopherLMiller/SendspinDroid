@@ -257,12 +257,16 @@ class AddServerWizardViewModel : ViewModel() {
     fun handleStepAction(action: WizardStepAction): Boolean {
         return when (action) {
             // Find server step
+            // A failed test's error is about the address it tried, so it
+            // goes once the address changes.
             is WizardStepAction.UpdateLocalAddress -> {
                 localAddress = action.address
+                resetLocalTest()
                 false
             }
             is WizardStepAction.SelectDiscoveredServer -> {
                 applyDiscoveredServer(action.server.name, action.server.address)
+                resetLocalTest()
                 false
             }
             WizardStepAction.StartDiscovery -> {

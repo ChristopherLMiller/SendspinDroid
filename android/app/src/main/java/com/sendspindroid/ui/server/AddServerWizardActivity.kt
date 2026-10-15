@@ -29,6 +29,7 @@ import com.sendspindroid.ui.wizard.ConnectionTestState
 import com.sendspindroid.ui.wizard.DiscoveredServerUi
 import com.sendspindroid.ui.wizard.WizardStep
 import com.sendspindroid.ui.wizard.WizardStepAction
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -87,6 +88,9 @@ class AddServerWizardActivity : AppCompatActivity() {
 
     private data class DiscoveredServer(val name: String, val address: String, val path: String)
 
+    // The connection test under way, which leaving the testing step cancels
+    private var localTestJob: Job? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -142,6 +146,13 @@ class AddServerWizardActivity : AppCompatActivity() {
     // ========================================================================
 
     private fun handleBack() {
+        // Left running, the test would still move the wizard on to Finish,
+        // or show its error, after the user has stepped back from it.
+        if (viewModel.currentStep.value == WizardStep.SS_TestLocal) {
+            localTestJob?.cancel()
+            localTestJob = null
+            viewModel.resetLocalTest()
+        }
         if (viewModel.onBack() == null) {
             finish()
         }
@@ -260,9 +271,11 @@ class AddServerWizardActivity : AppCompatActivity() {
     private fun startLocalConnectionTest() {
         // Navigate to the testing step
         if (viewModel.currentStep.value != WizardStep.SS_FindServer) return
+        // A failure shown from the last test does not belong to this one
+        viewModel.resetLocalTest()
         viewModel.navigateTo(WizardStep.SS_TestLocal)
 
-        lifecycleScope.launch {
+        localTestJob = lifecycleScope.launch {
             delay(500) // Brief delay for UI to show
 
             val result = testLocalConnection(viewModel.localAddress)
