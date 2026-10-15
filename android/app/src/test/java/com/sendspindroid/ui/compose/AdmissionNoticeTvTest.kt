@@ -37,8 +37,7 @@ class AdmissionNoticeTvTest {
 
     /**
      * Shows the notice the way the app does: in place of what was on screen
-     * when the server's admission state arrives. (Under Robolectric a focus
-     * request made in the very first composition is not honoured.)
+     * when the server's admission state arrives.
      */
     private fun show(formFactor: FormFactor) {
         composeTestRule.setContent {

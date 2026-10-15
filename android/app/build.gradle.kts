@@ -38,8 +38,8 @@ android {
     // Namespace replaces package attribute in AndroidManifest.xml (AGP 7.0+)
     namespace = "com.sendspindroid"
 
-    // compileSdk 36 required by androidx.core:core-ktx:1.17.0
-    compileSdk = 36
+    // compileSdk 37 required by Compose 1.12 (compose-bom 2026.09.00)
+    compileSdk = 37
 
     // Signing configuration for release builds
     // Only configure if keystore exists (allows CI to build unsigned APKs)
@@ -212,11 +212,15 @@ dependencies {
 
     // ========== Jetpack Compose ==========
     // BOM (Bill of Materials) ensures all Compose libraries use compatible versions
-    val composeBom = platform("androidx.compose:compose-bom:2025.01.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
 
     // Material Design 3 for Compose - modern theming and components
     implementation("androidx.compose.material3:material3")
+
+    // Material icons (Icons.Default, Icons.AutoMirrored) - material3 1.4 no
+    // longer brings them in
+    implementation("androidx.compose.material:material-icons-core")
 
     // Material3 Adaptive - WindowSizeClass detection and NavigationSuiteScaffold
     // (auto-switches between BottomNav, NavigationRail, and NavigationDrawer)
@@ -226,10 +230,9 @@ dependencies {
     // Foundation - core layout primitives (Column, Row, Box, LazyColumn)
     implementation("androidx.compose.foundation:foundation")
 
-    // Compose for TV - the side menu of the TV shell. 1.0.1 is built against
-    // Compose 1.6, so it leaves the BOM's versions as they are; 1.1 would raise
-    // Compose to 1.10 for every form factor.
-    implementation("androidx.tv:tv-material:1.0.1")
+    // Compose for TV - the side menu of the TV shell. 1.1.0 is built against
+    // Compose 1.10, below the BOM's, so it leaves the BOM's versions as they are.
+    implementation("androidx.tv:tv-material:1.1.0")
 
     // UI Tooling - @Preview support and debugging tools
     implementation("androidx.compose.ui:ui-tooling-preview")

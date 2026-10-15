@@ -239,10 +239,9 @@ private fun LazyListScope.discoveredServerItems(
                 server = server,
                 status = ServerItemStatus.ONLINE,
                 onClick = { onQuickConnectClick(server) },
-                onLongClick = { /* no-op for quick connect */ },
+                // No menu here
+                onLongClick = null,
                 onQuickConnectClick = { onQuickConnectClick(server) },
-                // No menu here, so nothing for a More button to open on a TV
-                showMoreButton = false,
                 modifier = Modifier.onFocusChanged { onFocusChanged(server.id, it.hasFocus) }
             )
         }

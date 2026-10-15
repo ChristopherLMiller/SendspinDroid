@@ -103,8 +103,9 @@ fun AddServerWizardScreen(
     val testingButtonFocus = remember { FocusRequester() }
     val nameFocus = remember { FocusRequester() }
     // The find-server step is a lazy list, which composes only what is in
-    // view, and a FocusRequester with nothing composed behind it throws. So
-    // on a TV its scroll is kept here, to bring an item into view first.
+    // view, and a FocusRequester with nothing composed behind it does
+    // nothing. So on a TV its scroll is kept here, to bring an item into
+    // view first.
     val findServerListState = rememberLazyListState()
     var focusNextOnceEnabled by remember { mutableStateOf(false) }
     if (isTv) {

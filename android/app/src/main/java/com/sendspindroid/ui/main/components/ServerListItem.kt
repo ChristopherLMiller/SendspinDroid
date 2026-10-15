@@ -1,6 +1,5 @@
 package com.sendspindroid.ui.main.components
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,25 +62,24 @@ enum class ServerItemStatus {
 /**
  * A server list item card showing server info and connection methods.
  *
- * A long press opens the server's menu. A TV remote cannot long-press, so on
- * a TV a More options button beside the card opens it instead, one D-pad
- * step to the right of the card.
+ * A long press opens the server's menu. On a TV, holding OK does too, but
+ * nothing tells the user so, and remote apps send each press's down and up
+ * back to back, so there a More options button beside the card opens it as
+ * well, one D-pad step to the right of the card.
  *
- * @param showMoreButton show that button on a TV. False for a card whose
- *   long press does nothing.
+ * @param onLongClick opens the menu. Null for a card that has none: a long
+ *   press, or OK held down, is then a click, and a TV shows no More button.
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ServerListItem(
     server: UnifiedServer,
     status: ServerItemStatus,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
     onQuickConnectClick: (() -> Unit)? = null,
     reconnectAttempt: Int? = null,
-    reconnectMaxAttempts: Int? = null,
-    showMoreButton: Boolean = true
+    reconnectMaxAttempts: Int? = null
 ) {
     val formFactor = LocalFormFactor.current
     val isTv = formFactor == FormFactor.TV
@@ -202,7 +200,7 @@ fun ServerListItem(
         }
 
         // Beside the card, not inside it, so that each is one D-pad stop.
-        if (isTv && showMoreButton) {
+        if (isTv && onLongClick != null) {
             Spacer(modifier = Modifier.width(16.dp))
             IconButton(
                 onClick = onLongClick,
