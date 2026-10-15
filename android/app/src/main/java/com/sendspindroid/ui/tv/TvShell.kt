@@ -14,12 +14,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -64,8 +68,10 @@ class TvMenuEntry(
  * [onLeave].
  *
  * A screen with nothing to focus, such as one waiting for a server, leaves
- * focus in the menu. The menu stays collapsed then, so the screen is not
- * dimmed, and opens at the first key; closing it only collapses it again.
+ * focus in the menu, and so does one whose focused control goes, such as the
+ * server list replaced by a connection in progress. The menu stays collapsed
+ * then, so the screen is not dimmed, and opens at the first key; closing it
+ * only collapses it again.
  *
  * @param home The screen being shown, first and selected.
  * @param entries Actions, below [home].
@@ -86,6 +92,10 @@ fun TvShell(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val menuOpen = drawerState.currentValue == DrawerValue.Open
     val homeEntry = remember { FocusRequester() }
+    // The drawer opens on any focus it gains, but only D-pad Left is the user
+    // going into the menu. The platform puts focus there too, when the focused
+    // control goes and the screen has nothing else to focus.
+    var enteredByLeft by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     // The drawer opens and closes as focus enters and leaves it, but focus
     // that is already in it does not enter it again: these set it too.
@@ -130,7 +140,15 @@ fun TvShell(
                             if (opens && event.type == KeyEventType.KeyDown) drawerState.setValue(DrawerValue.Open)
                             opens
                         }
-                        .focusProperties { onEnter = { homeEntry.requestFocus() } }
+                        .focusProperties {
+                            onEnter = {
+                                enteredByLeft = requestedFocusDirection == FocusDirection.Left
+                                homeEntry.requestFocus()
+                            }
+                        }
+                        // After the drawer's own handler, which has opened it.
+                        // Back and Menu open it themselves, in openMenu.
+                        .onFocusChanged { if (it.hasFocus && !enteredByLeft) drawerState.setValue(DrawerValue.Closed) }
                         .focusGroup()
                         .selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)

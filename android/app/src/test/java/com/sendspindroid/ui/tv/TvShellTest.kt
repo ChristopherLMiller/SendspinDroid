@@ -155,6 +155,41 @@ class TvShellTest {
     }
 
     @Test
+    fun `focus that falls into the menu when the screen loses its control leaves the menu collapsed`() {
+        var connecting by mutableStateOf(false)
+        composeTestRule.setContent {
+            SendSpinTheme {
+                TvShell(
+                    home = TvMenuEntry("Now Playing", Icons.Default.PlayArrow),
+                    entries = emptyList(),
+                    footerEntries = emptyList(),
+                    onLeave = {}
+                ) {
+                    // A screen that goes, with the control that had focus,
+                    // for one with nothing to focus
+                    Row(modifier = Modifier.padding(start = 320.dp)) {
+                        if (connecting) Text("Connecting") else Button(onClick = {}) { Text("Kitchen Server") }
+                    }
+                }
+            }
+        }
+        composeTestRule.onNodeWithText("Kitchen Server").requestFocus()
+
+        connecting = true
+        composeTestRule.waitForIdle()
+
+        // The platform gives the focus to the menu, which has its labels only
+        // while it is open
+        composeTestRule.onNode(isFocused()).assertExists()
+        composeTestRule.onNodeWithText("Now Playing").assertDoesNotExist()
+
+        // and a key opens it
+        composeTestRule.onNode(isFocused()).performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+    }
+
+    @Test
     fun `back opens the menu and back in the menu leaves`() {
         showShell()
         composeTestRule.onNodeWithText("Play").requestFocus()

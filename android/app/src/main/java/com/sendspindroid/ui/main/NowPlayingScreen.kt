@@ -583,8 +583,9 @@ private fun NowPlayingTv(
     val formFactor = LocalFormFactor.current
     val playFocusRequester = remember { FocusRequester() }
 
-    // Auto-focus Play button on first composition
-    TvInitialFocus(playFocusRequester)
+    // Auto-focus Play button on first composition, or when the controls are
+    // enabled: just connected, the player has no state yet
+    TvInitialFocus(playFocusRequester, canFocus = controlsEnabled)
 
     Row(
         modifier = modifier
