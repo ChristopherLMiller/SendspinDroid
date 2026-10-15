@@ -9,12 +9,12 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isFocusable
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
@@ -132,15 +132,19 @@ class SettingsScreenTvTest {
         assertEquals(0, keyboardsOpened)
     }
 
+    // A SelectionContainer is a focus stop with no focus semantics of its
+    // own, so these move focus with the D-pad to find it.
+
     @Test
     fun `on a TV the pairing token and client id are not focus stops`() {
         show(FormFactor.TV)
-        val token = viewModel.pairingToken()!!
+        composeTestRule.onNodeWithText("Player Name").assertIsFocused()
 
-        composeTestRule.onAllNodes(isFocusable() and hasAnyDescendant(hasText(token)))
-            .assertCountEquals(0)
-        composeTestRule.onAllNodes(isFocusable() and hasAnyDescendant(hasText(viewModel.clientId)))
-            .assertCountEquals(0)
+        // Down to the QR code, then Down past the token and the client id.
+        composeTestRule.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+
+        composeTestRule.onNodeWithText("Dynamic pairing code").assertIsFocused()
         composeTestRule.onAllNodesWithText("Copy pairing token").assertCountEquals(0)
         composeTestRule.onNodeWithText("Scan with your phone", substring = true).assertExists()
     }
@@ -148,11 +152,14 @@ class SettingsScreenTvTest {
     @Test
     fun `on a phone the pairing token can still be selected and copied`() {
         show(FormFactor.PHONE)
-        val token = viewModel.pairingToken()!!
+        composeTestRule.onNodeWithText("Player Name").requestFocus()
 
-        composeTestRule.onAllNodes(isFocusable() and hasAnyDescendant(hasText(token)))
-            .assertCountEquals(1)
-        composeTestRule.onNodeWithText("Copy pairing token").assertExists()
+        // The token's SelectionContainer takes focus, and shows in no node.
+        composeTestRule.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.onAllNodes(isFocused()).assertCountEquals(0)
+
+        composeTestRule.onRoot().performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.onNodeWithText("Copy pairing token").assertIsFocused()
     }
 
     @Test
