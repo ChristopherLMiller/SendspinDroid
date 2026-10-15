@@ -10,9 +10,14 @@ import org.junit.Test
  */
 class PlayerNameTest : E2ETestBase() {
 
-    private fun helloNames(): List<String> = fakeTransport.sentTextMessages
-        .filter { it.contains("\"type\":\"client/hello\"") }
-        .map { Regex("\"name\":\"([^\"]*)\"").find(it)!!.groupValues[1] }
+    private fun helloNames(): List<String> {
+        // The client sends on its own timer thread: the hello may not have
+        // landed when the handshake call returns.
+        fakeTransport.hasSentMessageContaining("\"type\":\"client/hello\"")
+        return fakeTransport.sentTextMessages
+            .filter { it.contains("\"type\":\"client/hello\"") }
+            .map { Regex("\"name\":\"([^\"]*)\"").find(it)!!.groupValues[1] }
+    }
 
     @Test
     fun `the hello carries the name the client was built with`() {
