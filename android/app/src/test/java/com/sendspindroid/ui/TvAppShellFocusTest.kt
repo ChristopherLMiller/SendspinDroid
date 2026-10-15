@@ -3,10 +3,13 @@ package com.sendspindroid.ui
 import android.app.Application
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.test.core.app.ApplicationProvider
 import com.sendspindroid.model.AppConnectionState
@@ -115,5 +118,17 @@ class TvAppShellFocusTest {
 
         composeTestRule.onNodeWithContentDescription("Play button").assertIsFocused()
         composeTestRule.onNodeWithText("Now Playing").assertDoesNotExist()
+    }
+
+    @Test
+    fun `left from Add Your First Server opens the menu, past a found server below`() {
+        show()
+        val add = composeTestRule.onNodeWithText("Add Your First Server")
+        add.assertIsFocused()
+
+        add.performKeyInput { pressKey(Key.DirectionLeft) }
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Servers").assertIsFocused()
     }
 }

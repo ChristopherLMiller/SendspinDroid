@@ -14,10 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
@@ -47,6 +49,15 @@ import androidx.tv.material3.rememberDrawerState
 import com.sendspindroid.ui.adaptive.TvOverscanHorizontal
 import com.sendspindroid.ui.adaptive.TvOverscanVertical
 
+/**
+ * The side menu's entry for the screen being shown, inside [TvShell]; null
+ * elsewhere. For D-pad Left from a control with nothing on the screen to its
+ * left, where Compose's search would still find something: it takes any
+ * control that is even a little to the left, however far below, over the
+ * menu outside the screen's list.
+ */
+val LocalTvMenu = staticCompositionLocalOf<FocusRequester?> { null }
+
 /** One entry of the TV side menu. */
 class TvMenuEntry(
     val label: String,
@@ -72,6 +83,8 @@ class TvMenuEntry(
  * server list replaced by a connection in progress. The menu stays collapsed
  * then, so the screen is not dimmed, and opens at the first key; closing it
  * only collapses it again.
+ *
+ * Screens reach the menu's [home] entry through [LocalTvMenu].
  *
  * @param home The screen being shown, first and selected.
  * @param entries Actions, below [home].
@@ -175,7 +188,7 @@ fun TvShell(
                 }
                 .focusGroup()
         ) {
-            content()
+            CompositionLocalProvider(LocalTvMenu provides homeEntry) { content() }
         }
     }
 }
