@@ -65,6 +65,28 @@ class FocusReturnTest {
     }
 
     @Test
+    fun `initial focus waits for controls that cannot take it yet`() {
+        enabled = false
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalFormFactor provides FormFactor.TV) {
+                SendSpinTheme {
+                    val play = remember { FocusRequester() }
+                    TvInitialFocus(play, canFocus = enabled)
+                    Button(onClick = {}, enabled = enabled, modifier = Modifier.focusRequester(play)) {
+                        Text("Play")
+                    }
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+
+        enabled = true
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Play").assertIsFocused()
+    }
+
+    @Test
     fun `focus elsewhere is not taken when the controls return`() {
         show()
         composeTestRule.onNodeWithText("Art").requestFocus()

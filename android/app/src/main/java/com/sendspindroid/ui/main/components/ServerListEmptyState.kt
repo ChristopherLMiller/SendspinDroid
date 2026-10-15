@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -66,6 +67,7 @@ import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.adaptive.tvFocusRing
 import com.sendspindroid.ui.theme.SendSpinTheme
+import com.sendspindroid.ui.tv.LocalTvMenu
 
 /**
  * Welcome / empty state shown when no saved servers are available.
@@ -293,8 +295,14 @@ private fun HeroCard(
                     HeroWelcome()
                 }
                 Spacer(modifier = Modifier.width(48.dp))
+                // Nothing on the screen is between these and the side menu,
+                // so moving toward it goes there. A found server's card below,
+                // as wide as the list, would otherwise count as on that side.
+                val menu = LocalTvMenu.current
                 Column(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusProperties { if (menu != null) start = menu },
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     HeroActions(

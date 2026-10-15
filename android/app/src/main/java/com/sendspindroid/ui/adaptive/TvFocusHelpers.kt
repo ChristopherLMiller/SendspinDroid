@@ -108,17 +108,21 @@ fun Modifier.tvFocusable(
     .focusable()
 
 /**
- * Requests focus on first composition for TV initial focus.
+ * Requests focus once for TV initial focus: on first composition, or when
+ * [canFocus] first becomes true.
  * Use this to auto-focus the primary control (e.g., Play button) when a TV screen appears.
  *
- * @param focusRequester The FocusRequester to trigger on first composition
+ * @param focusRequester The FocusRequester to request focus on
+ * @param canFocus Whether the control can take focus yet. A disabled control
+ *   cannot, and the request waits until it can.
  */
 @Composable
-fun TvInitialFocus(focusRequester: FocusRequester) {
+fun TvInitialFocus(focusRequester: FocusRequester, canFocus: Boolean = true) {
     val formFactor = LocalFormFactor.current
     if (formFactor == FormFactor.TV) {
-        LaunchedEffect(Unit) {
-            focusRequester.requestFocus()
+        var done by remember { mutableStateOf(false) }
+        LaunchedEffect(canFocus) {
+            if (canFocus && !done) done = focusRequester.requestFocus()
         }
     }
 }

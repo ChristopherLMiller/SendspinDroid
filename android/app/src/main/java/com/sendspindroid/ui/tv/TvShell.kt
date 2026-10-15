@@ -14,12 +14,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -29,6 +36,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.DrawerValue
 import androidx.tv.material3.Icon
@@ -42,6 +51,19 @@ import androidx.tv.material3.darkColorScheme
 import androidx.tv.material3.rememberDrawerState
 import com.sendspindroid.ui.adaptive.TvOverscanHorizontal
 import com.sendspindroid.ui.adaptive.TvOverscanVertical
+
+/**
+ * The side menu's entry for the screen being shown, inside [TvShell]; null
+ * elsewhere. For D-pad toward the menu from a control with nothing on the
+ * screen between it and the menu, where Compose's search would still find
+ * something: it takes any control that is even a little that way, however far
+ * below, over the menu outside the screen's list. Set it as the control's
+ * `start`, which is the menu's side in either layout direction.
+ */
+val LocalTvMenu = staticCompositionLocalOf<FocusRequester?> { null }
+
+/** Whether the side menu is open, inside [TvShell]; false elsewhere. */
+val LocalTvMenuOpen = compositionLocalOf { false }
 
 /** One entry of the TV side menu. */
 class TvMenuEntry(
@@ -64,8 +86,12 @@ class TvMenuEntry(
  * [onLeave].
  *
  * A screen with nothing to focus, such as one waiting for a server, leaves
- * focus in the menu. The menu stays collapsed then, so the screen is not
- * dimmed, and opens at the first key; closing it only collapses it again.
+ * focus in the menu, and so does one whose focused control goes, such as the
+ * server list replaced by a connection in progress. The menu stays collapsed
+ * then, so the screen is not dimmed, and opens at the first key; closing it
+ * only collapses it again.
+ *
+ * Screens reach the menu's [home] entry through [LocalTvMenu].
  *
  * @param home The screen being shown, first and selected.
  * @param entries Actions, below [home].
@@ -86,6 +112,13 @@ fun TvShell(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val menuOpen = drawerState.currentValue == DrawerValue.Open
     val homeEntry = remember { FocusRequester() }
+    // D-pad toward the menu: Left, or Right in a right-to-left layout, where
+    // the menu is at the right edge
+    val towardMenu = if (LocalLayoutDirection.current == LayoutDirection.Rtl) FocusDirection.Right else FocusDirection.Left
+    // The drawer opens on any focus it gains, but only D-pad toward the menu
+    // is the user going into it. The platform puts focus there too when it
+    // picks a control itself, as when the focused control goes.
+    var enteredTowardMenu by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     // The drawer opens and closes as focus enters and leaves it, but focus
     // that is already in it does not enter it again: these set it too.
@@ -130,7 +163,15 @@ fun TvShell(
                             if (opens && event.type == KeyEventType.KeyDown) drawerState.setValue(DrawerValue.Open)
                             opens
                         }
-                        .focusProperties { onEnter = { homeEntry.requestFocus() } }
+                        .focusProperties {
+                            onEnter = {
+                                enteredTowardMenu = requestedFocusDirection == towardMenu
+                                homeEntry.requestFocus()
+                            }
+                        }
+                        // After the drawer's own handler, which has opened it.
+                        // Back and Menu open it themselves, in openMenu.
+                        .onFocusChanged { if (it.hasFocus && !enteredTowardMenu) drawerState.setValue(DrawerValue.Closed) }
                         .focusGroup()
                         .selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -157,7 +198,7 @@ fun TvShell(
                 }
                 .focusGroup()
         ) {
-            content()
+            CompositionLocalProvider(LocalTvMenu provides homeEntry, LocalTvMenuOpen provides menuOpen) { content() }
         }
     }
 }
