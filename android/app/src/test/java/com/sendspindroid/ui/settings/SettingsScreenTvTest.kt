@@ -2,12 +2,10 @@ package com.sendspindroid.ui.settings
 
 import android.app.Application
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
@@ -38,7 +36,6 @@ import org.robolectric.annotation.Config
  * Settings driven by a remote: where focus starts, that Down from the Theme
  * row reaches the sync offset, and which controls are focus stops at all.
  */
-@OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp")
 class SettingsScreenTvTest {
@@ -56,7 +53,6 @@ class SettingsScreenTvTest {
     /** Input sessions started by the screen's text fields: each one opens the keyboard. */
     private var keyboardsOpened = 0
 
-    @OptIn(ExperimentalComposeUiApi::class)
     private fun show(formFactor: FormFactor, canShare: Boolean = true) {
         composeTestRule.setContent {
             InterceptPlatformTextInput(

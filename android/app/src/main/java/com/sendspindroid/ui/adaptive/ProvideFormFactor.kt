@@ -1,7 +1,6 @@
 package com.sendspindroid.ui.adaptive
 
 import androidx.compose.material.ripple.RippleAlpha
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.RippleConfiguration
 import androidx.compose.runtime.Composable
@@ -13,12 +12,11 @@ import androidx.compose.ui.platform.LocalContext
  * Provides [formFactor] to [content] through [LocalFormFactor].
  *
  * On a TV it also makes focus visible on every Material3 control. Their own
- * focus treatment is a state layer of 10% opacity (material3 1.3), which
+ * focus treatment is a state layer of 10% opacity (material3 1.4), which
  * cannot be told apart across a room, and Material3 draws it with its own
  * ripple rather than LocalIndication, so the ripple configuration is the one
  * place that reaches them all.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProvideFormFactor(formFactor: FormFactor, content: @Composable () -> Unit) {
     if (formFactor == FormFactor.TV) {
@@ -45,7 +43,6 @@ fun ProvideTvFormFactor(content: @Composable () -> Unit) {
 }
 
 /** The Material3 defaults, with the focused layer at 30% instead of 10%. */
-@OptIn(ExperimentalMaterial3Api::class)
 private val TvRippleConfiguration = RippleConfiguration(
     rippleAlpha = RippleAlpha(
         draggedAlpha = 0.16f,

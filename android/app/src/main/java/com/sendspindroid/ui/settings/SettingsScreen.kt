@@ -83,8 +83,11 @@ import com.sendspindroid.ui.adaptive.TvOverscanVertical
 import com.sendspindroid.ui.adaptive.tvFocusable
 import com.sendspindroid.ui.theme.SendSpinTheme
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.platform.LocalClipboardManager
+import android.content.ClipData
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.background
 import android.widget.Toast
@@ -517,7 +520,8 @@ private fun PairingTokenPreference(
 ) {
     val isTv = LocalFormFactor.current == FormFactor.TV
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     val copiedMessage = stringResource(R.string.pairing_token_copied)
 
     Column(
@@ -592,8 +596,10 @@ private fun PairingTokenPreference(
             Spacer(modifier = Modifier.height(8.dp))
             TextButton(
                 onClick = {
-                    clipboard.setText(AnnotatedString(token))
-                    Toast.makeText(context, copiedMessage, Toast.LENGTH_SHORT).show()
+                    scope.launch {
+                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("plain text", token)))
+                        Toast.makeText(context, copiedMessage, Toast.LENGTH_SHORT).show()
+                    }
                 }
             ) {
                 Text(stringResource(R.string.pairing_token_copy))

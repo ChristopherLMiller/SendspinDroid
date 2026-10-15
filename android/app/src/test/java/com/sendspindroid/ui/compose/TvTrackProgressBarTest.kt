@@ -13,7 +13,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
@@ -40,11 +39,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * A TV remote cannot drag a slider: when the server offers seek, Left and
- * Right on the focused bar step through the track, and a run of presses goes
- * to the server as one seek.
+ * A TV remote moves a Material3 slider by 1% a press, and each press is a
+ * seek of its own: when the server offers seek, Left and Right on the focused
+ * bar step through the track instead, and a run of presses goes to the
+ * server as one seek.
  */
-@OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TvTrackProgressBarTest {

@@ -3,7 +3,6 @@ package com.sendspindroid.ui.compose
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToNodeAction
@@ -32,7 +31,6 @@ import org.robolectric.annotation.Config
  * The server list driven by a TV remote: every action is reachable with the
  * D-pad, and focus starts on, and stays on, something that can be used.
  */
-@OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w960dp-h540dp-land")
 class ServerListTvTest {

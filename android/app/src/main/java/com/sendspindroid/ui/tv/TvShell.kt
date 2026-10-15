@@ -15,7 +15,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
@@ -74,7 +73,6 @@ class TvMenuEntry(
  * @param header Shown above the entries; told whether the menu is open.
  * @param onLeave Back pressed in the open menu.
  */
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun TvShell(
     home: TvMenuEntry,
@@ -95,9 +93,10 @@ fun TvShell(
         homeEntry.requestFocus()
         drawerState.setValue(DrawerValue.Open)
     }
-    // As D-pad Right does. Restoring what had focus on the screen is not
-    // reliable in Compose 1.7: restored into a lazy list, the focus can end up
-    // on the list itself, with nothing focused that the user can see.
+    // As D-pad Right does. Restoring what had focus on the screen would need a
+    // focusRestorer on each lazy list: with one only around the screen,
+    // Compose 1.12 puts focus on the list's top visible row, not the one that
+    // had it.
     val closeMenu: () -> Unit = {
         if (!focusManager.moveFocus(FocusDirection.Right)) drawerState.setValue(DrawerValue.Closed)
     }
@@ -131,7 +130,7 @@ fun TvShell(
                             if (opens && event.type == KeyEventType.KeyDown) drawerState.setValue(DrawerValue.Open)
                             opens
                         }
-                        .focusProperties { enter = { homeEntry } }
+                        .focusProperties { onEnter = { homeEntry.requestFocus() } }
                         .focusGroup()
                         .selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
