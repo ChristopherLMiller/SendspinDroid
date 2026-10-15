@@ -1,5 +1,7 @@
 package com.sendspindroid.ui.compose
 
+import android.widget.LinearLayout
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -8,11 +10,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
@@ -46,7 +49,7 @@ import org.robolectric.annotation.Config
 class VolumeSliderTest {
 
     @get:Rule
-    val composeTestRule = createComposeRule()
+    val composeTestRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun volumeSlider_callbackReceivesValues_inZeroToOneRange() {
@@ -178,5 +181,36 @@ class VolumeSliderTest {
         composeTestRule.waitForIdle()
         assertEquals(0.49f, volume, 0.001f)
         slider().assertIsFocused()
+    }
+
+    @Test
+    fun volumeSlider_downAtTheBottomOfCompose_movesFocusToTheViewBelow() {
+        // As on Now Playing in portrait: the slider is the last focus stop in
+        // Compose, and a View beside the ComposeView, such as a Snackbar's
+        // action, is below it.
+        val activity = composeTestRule.activity
+        val below = android.widget.Button(activity).apply { text = "Below" }
+        composeTestRule.runOnUiThread {
+            activity.setContentView(LinearLayout(activity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(ComposeView(activity).apply {
+                    setContent {
+                        CompositionLocalProvider(LocalFormFactor provides FormFactor.PHONE) {
+                            SendSpinTheme {
+                                VolumeSlider(volume = volume, onVolumeChange = { volume = it })
+                            }
+                        }
+                    }
+                })
+                addView(below)
+            })
+        }
+
+        slider().requestFocus()
+        slider().performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.waitForIdle()
+
+        assertTrue(below.isFocused)
+        assertEquals(0.5f, volume, 0f)
     }
 }

@@ -34,6 +34,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -83,6 +84,7 @@ fun TrackProgressBar(
     val barColor = accentColor ?: MaterialTheme.colorScheme.primary
     val barDescription = stringResource(R.string.track_position)
     val focusManager = LocalFocusManager.current
+    val view = LocalView.current
     val stepOnArrows = rememberArrowKeySeek(seek, displayPositionMs, durationMs, onSeek)
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -104,7 +106,7 @@ fun TrackProgressBar(
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics { contentDescription = barDescription }
-                    .upDownMovesFocus(focusManager)
+                    .upDownMovesFocus(focusManager, view)
                     .then(stepOnArrows),
                 colors = SliderDefaults.colors(
                     thumbColor = barColor,
