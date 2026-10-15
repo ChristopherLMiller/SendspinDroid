@@ -463,6 +463,9 @@ class MainActivity : AppCompatActivity() {
 
     /** The user named the player and pressed Continue. */
     private fun onWelcomeConfirmed(name: String) {
+        // Continue pressed twice (a remote's OK, Done and a tap) is queued
+        // twice: a second controller would replace the one being connected.
+        if (prefs.getBoolean(PREF_ONBOARDING_SHOWN, false)) return
         UserSettings.setPlayerName(name)
         prefs.edit().putBoolean(PREF_ONBOARDING_SHOWN, true).apply()
         // A service Android Auto started already advertises: it takes the

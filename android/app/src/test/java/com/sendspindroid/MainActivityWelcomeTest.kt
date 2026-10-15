@@ -166,8 +166,7 @@ class MainActivityWelcomeTest {
         assertTrue(welcomeDone())
     }
 
-    @Test
-    fun `a service already running is told the new name`() {
+    private fun countRenames(): () -> Int {
         var told = 0
         LocalBroadcastManager.getInstance(app).registerReceiver(
             object : BroadcastReceiver() {
@@ -175,10 +174,31 @@ class MainActivityWelcomeTest {
             },
             IntentFilter(SettingsViewModel.ACTION_PLAYER_NAME_CHANGED)
         )
+        return { told }
+    }
+
+    @Test
+    fun `a service already running is told the new name`() {
+        val renames = countRenames()
         Robolectric.buildActivity(MainActivity::class.java).create()
 
         confirm(welcomeDialog()!!)
 
-        assertEquals(1, told)
+        assertEquals(1, renames())
+    }
+
+    @Test
+    fun `pressing continue twice confirms once`() {
+        val renames = countRenames()
+        Robolectric.buildActivity(MainActivity::class.java).create()
+        val continueButton = welcomeDialog()!!.getButton(AlertDialog.BUTTON_POSITIVE)
+
+        // A remote's OK pressed twice: both clicks are queued before the
+        // dialog's dismissal is.
+        continueButton.performClick()
+        continueButton.performClick()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(1, renames())
     }
 }

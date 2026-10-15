@@ -1,5 +1,6 @@
 package com.sendspindroid
 
+import android.content.Context
 import android.os.Bundle
 import androidx.lifecycle.ViewModelProvider
 import androidx.media3.common.MediaMetadata
@@ -16,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
@@ -40,6 +42,12 @@ class MainActivityRecreateTest {
         every { controller.isPlaying } returns playing
         every { controller.sessionExtras } returns Bundle()
         every { controller.mediaMetadata } returns MediaMetadata.EMPTY
+
+        // A relaunch: the welcome was confirmed on the first run, so the
+        // activity builds its controller in onCreate.
+        RuntimeEnvironment.getApplication()
+            .getSharedPreferences("sendspindroid_prefs", Context.MODE_PRIVATE)
+            .edit().putBoolean("onboarding_shown", true).commit()
 
         val activity = Robolectric.buildActivity(MainActivity::class.java).create()
         MainActivity::class.java.getDeclaredField("mediaController").apply {
