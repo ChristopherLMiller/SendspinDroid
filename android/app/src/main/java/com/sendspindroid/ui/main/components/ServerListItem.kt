@@ -67,20 +67,19 @@ enum class ServerItemStatus {
  * back to back, so there a More options button beside the card opens it as
  * well, one D-pad step to the right of the card.
  *
- * @param showMoreButton show that button on a TV. False for a card whose
- *   long press does nothing.
+ * @param onLongClick opens the menu. Null for a card that has none: a long
+ *   press, or OK held down, is then a click, and a TV shows no More button.
  */
 @Composable
 fun ServerListItem(
     server: UnifiedServer,
     status: ServerItemStatus,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
     onQuickConnectClick: (() -> Unit)? = null,
     reconnectAttempt: Int? = null,
-    reconnectMaxAttempts: Int? = null,
-    showMoreButton: Boolean = true
+    reconnectMaxAttempts: Int? = null
 ) {
     val formFactor = LocalFormFactor.current
     val isTv = formFactor == FormFactor.TV
@@ -201,7 +200,7 @@ fun ServerListItem(
         }
 
         // Beside the card, not inside it, so that each is one D-pad stop.
-        if (isTv && showMoreButton) {
+        if (isTv && onLongClick != null) {
             Spacer(modifier = Modifier.width(16.dp))
             IconButton(
                 onClick = onLongClick,

@@ -7,10 +7,12 @@ import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollToNodeAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import com.sendspindroid.model.LocalConnection
@@ -53,6 +55,7 @@ class ServerListTvTest {
     private val saved = mutableStateOf(emptyList<UnifiedServer>())
     private val discovered = mutableStateOf(emptyList<UnifiedServer>())
     private val menus = mutableListOf<String>()
+    private val connects = mutableListOf<String>()
 
     private fun show(formFactor: FormFactor = FormFactor.TV, searching: Boolean = false) {
         composeTestRule.setContent {
@@ -67,7 +70,7 @@ class ServerListTvTest {
                         reconnectInfo = emptyMap(),
                         onServerClick = {},
                         onServerLongClick = { menus += it.name },
-                        onQuickConnectClick = {},
+                        onQuickConnectClick = { connects += it.name },
                         onAddServerClick = {},
                         mode = ConnectionModeState(searching, "Living Room TV", 8928) {},
                     )
@@ -176,6 +179,39 @@ class ServerListTvTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Kitchen Server").assertIsFocused()
+    }
+
+    @Test
+    fun `on a TV holding OK on a found server connects`() {
+        discovered.value = listOf(kitchen)
+        show(searching = true)
+        val modeButton = composeTestRule.onNodeWithText("Wait for a server to connect instead")
+        modeButton.requestFocus()
+        modeButton.performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.waitForIdle()
+        val card = composeTestRule.onNodeWithText("Kitchen Server")
+        card.assertIsFocused()
+
+        // Held past the long-press timeout. The card has no menu to open.
+        card.performKeyInput {
+            keyDown(Key.DirectionCenter)
+            advanceEventTime(viewConfiguration.longPressTimeoutMillis + 100)
+            keyUp(Key.DirectionCenter)
+        }
+        composeTestRule.waitForIdle()
+
+        assertEquals(listOf("Kitchen Server"), connects)
+    }
+
+    @Test
+    fun `on a phone a long press on a found server connects`() {
+        discovered.value = listOf(kitchen)
+        show(FormFactor.PHONE, searching = true)
+
+        composeTestRule.onNodeWithText("Kitchen Server").performTouchInput { longClick() }
+        composeTestRule.waitForIdle()
+
+        assertEquals(listOf("Kitchen Server"), connects)
     }
 
     @Test
