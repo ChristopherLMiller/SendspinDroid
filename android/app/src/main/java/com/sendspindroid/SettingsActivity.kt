@@ -2,6 +2,7 @@ package com.sendspindroid
 
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.setContent
@@ -23,6 +24,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import com.sendspindroid.ui.adaptive.ProvideTvFormFactor
+import com.sendspindroid.ui.adaptive.isTvDevice
 
 /**
  * Activity hosting the Compose-based settings screen.
@@ -39,6 +41,11 @@ class SettingsActivity : AppCompatActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
+        // A TV may have nothing to share to: on the SHIELD the only target is
+        // a stub that does nothing. Read once, as nothing installs a share
+        // target while Settings is open.
+        val canShare = !isTvDevice() || hasShareTarget(packageManager)
+
         setContent {
             SendSpinTheme {
                 ProvideTvFormFactor {
@@ -47,7 +54,8 @@ class SettingsActivity : AppCompatActivity() {
                         onNavigateBack = { finish() },
                         onExportLogs = { exportDebugLogs() },
                         onReportProblem = { reportProblem() },
-                        onRestartApp = { restartApp() }
+                        onRestartApp = { restartApp() },
+                        canShare = canShare
                     )
                 }
             }
@@ -131,3 +139,16 @@ class SettingsActivity : AppCompatActivity() {
         const val EXIT_TIMEOUT_MS = 3_000L
     }
 }
+
+/** Android TV's placeholder for the apps a TV leaves out, mail among them. */
+private const val TV_STUB_PACKAGE = "com.google.android.tv.frameworkpackagestubs"
+
+/**
+ * Whether anything can receive the text shares that Report a problem and
+ * Export Debug Logs send. A TV's stub package answers a share and does
+ * nothing with it, so it does not count.
+ */
+@Suppress("DEPRECATION") // The ResolveInfoFlags overload needs API 33.
+internal fun hasShareTarget(packageManager: PackageManager): Boolean =
+    packageManager.queryIntentActivities(Intent(Intent.ACTION_SEND).setType("text/plain"), 0)
+        .any { it.activityInfo.packageName != TV_STUB_PACKAGE }
