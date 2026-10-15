@@ -47,6 +47,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         const val ACTION_HIGH_POWER_MODE_CHANGED = "com.sendspindroid.ACTION_HIGH_POWER_MODE_CHANGED"
         const val EXTRA_HIGH_POWER_MODE_ENABLED = "high_power_mode_enabled"
         const val ACTION_PREFERRED_CODEC_CHANGED = "com.sendspindroid.ACTION_PREFERRED_CODEC_CHANGED"
+        const val ACTION_PLAYER_NAME_CHANGED = "com.sendspindroid.ACTION_PLAYER_NAME_CHANGED"
         const val EXTRA_PREFERRED_CODEC = "preferred_codec"
     }
 
@@ -176,6 +177,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setPlayerName(name: String) {
         UserSettings.setPlayerName(name)
         _playerName.value = UserSettings.getPlayerName()
+
+        // Tell PlaybackService, so the server hears the new name now
+        LocalBroadcastManager.getInstance(getApplication())
+            .sendBroadcast(Intent(ACTION_PLAYER_NAME_CHANGED))
     }
 
     // Display settings

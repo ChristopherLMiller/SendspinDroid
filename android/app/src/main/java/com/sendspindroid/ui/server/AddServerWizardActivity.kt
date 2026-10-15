@@ -279,8 +279,9 @@ class AddServerWizardActivity : AppCompatActivity() {
 
     private suspend fun testLocalConnection(address: String): Result<Int> {
         Log.d(TAG, "Testing local connection to: $address")
+        // A full handshake: the server meets this device under its name here
         val transient = SendSpin(
-            deviceName = android.os.Build.MODEL,
+            deviceName = com.sendspindroid.UserSettings.getPlayerName(),
             callback = noopSendSpinCallback,
             host = com.sendspindroid.AppSendSpinHost,
         )

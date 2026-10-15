@@ -78,10 +78,22 @@ import java.util.concurrent.atomic.AtomicLong
  * this client decides what happens next.
  */
 class SendSpin(
-    private val deviceName: String,
+    deviceName: String,
     callback: Callback,
     private val host: SendSpinHost,
 ) : SendSpinProtocolHandler(TAG) {
+
+    // The name the next client/hello carries (setDeviceName)
+    @Volatile
+    private var deviceName: String = deviceName
+
+    /**
+     * The player's name from now on. A connection already made keeps the one
+     * its client/hello carried: the name is only sent there.
+     */
+    fun setDeviceName(name: String) {
+        deviceName = name
+    }
 
     /**
      * False while this connection is not the one its owner plays from: a
