@@ -1,11 +1,23 @@
 package com.sendspindroid
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Looper
+import android.view.View
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
 import androidx.appcompat.app.AlertDialog
+import androidx.core.view.children
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.preference.PreferenceManager
 import com.sendspindroid.playback.PlaybackService
+import com.sendspindroid.ui.settings.SettingsViewModel
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -89,5 +101,73 @@ class MainActivityWelcomeTest {
 
         assertNull(welcomeDialog())
         assertNotNull(controllerFuture(activity))
+    }
+
+    private fun View.firstEditText(): EditText? = when (this) {
+        is EditText -> this
+        is ViewGroup -> children.firstNotNullOfOrNull { it.firstEditText() }
+        else -> null
+    }
+
+    private fun AlertDialog.nameField(): EditText = window!!.decorView.firstEditText()!!
+
+    @Test
+    fun `the welcome offers the name the player would use`() {
+        Robolectric.buildActivity(MainActivity::class.java).create()
+
+        assertEquals(Build.MODEL, welcomeDialog()!!.nameField().text.toString())
+    }
+
+    @Test
+    fun `continue keeps the name typed in the welcome`() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).create().get()
+        val dialog = welcomeDialog()!!
+
+        dialog.nameField().setText("Kitchen")
+        confirm(dialog)
+
+        assertEquals("Kitchen", UserSettings.getPlayerName())
+        assertNotNull(controllerFuture(activity))
+    }
+
+    @Test
+    fun `a blank name falls back to the device model`() {
+        Robolectric.buildActivity(MainActivity::class.java).create()
+        val dialog = welcomeDialog()!!
+
+        dialog.nameField().setText("")
+        confirm(dialog)
+
+        assertEquals(Build.MODEL, UserSettings.getPlayerName())
+    }
+
+    @Test
+    fun `done on the keyboard does what continue does`() {
+        val activity = Robolectric.buildActivity(MainActivity::class.java).create().get()
+        val field = welcomeDialog()!!.nameField()
+
+        field.setText("Kitchen")
+        field.onEditorAction(EditorInfo.IME_ACTION_DONE)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals("Kitchen", UserSettings.getPlayerName())
+        assertNotNull(controllerFuture(activity))
+        assertTrue(welcomeDone())
+    }
+
+    @Test
+    fun `a service already running is told the new name`() {
+        var told = 0
+        LocalBroadcastManager.getInstance(app).registerReceiver(
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) { told++ }
+            },
+            IntentFilter(SettingsViewModel.ACTION_PLAYER_NAME_CHANGED)
+        )
+        Robolectric.buildActivity(MainActivity::class.java).create()
+
+        confirm(welcomeDialog()!!)
+
+        assertEquals(1, told)
     }
 }
