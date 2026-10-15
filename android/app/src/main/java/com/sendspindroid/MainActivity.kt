@@ -2040,10 +2040,23 @@ class MainActivity : AppCompatActivity() {
                     return true
                 }
             }
+            // A relative seek where the server offers one: it moves from the
+            // server's own position, so presses quicker than its answer add up,
+            // and it works on a stream with no absolute seek. Otherwise from
+            // the position shown.
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                if (isTvDevice && connectionState is AppConnectionState.Connected && viewModel.seekable.value) {
+                val forward = keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                val controller = mediaController
+                val relative = controller?.isCommandAvailable(
+                    if (forward) Player.COMMAND_SEEK_FORWARD else Player.COMMAND_SEEK_BACK
+                ) == true
+                if (isTvDevice && connectionState is AppConnectionState.Connected && (relative || viewModel.seekable.value)) {
                     if (firstPress) {
-                        seekBy(if (keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) SEEK_STEP_MS else -SEEK_STEP_MS)
+                        when {
+                            relative && forward -> controller?.seekForward()
+                            relative -> controller?.seekBack()
+                            else -> seekBy(if (forward) SEEK_STEP_MS else -SEEK_STEP_MS)
+                        }
                     }
                     return true
                 }

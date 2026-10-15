@@ -55,6 +55,7 @@ import com.sendspindroid.ui.adaptive.TvInitialFocus
 import com.sendspindroid.ui.adaptive.TvOverscanHorizontal
 import com.sendspindroid.ui.adaptive.TvOverscanVertical
 import com.sendspindroid.ui.adaptive.overscanSafe
+import com.sendspindroid.ui.adaptive.rememberFocusReturn
 import com.sendspindroid.ui.adaptive.rememberFocusFallback
 import com.sendspindroid.ui.adaptive.tvFocusRing
 import com.sendspindroid.ui.main.components.AlbumArtCard
@@ -613,7 +614,9 @@ private fun NowPlayingTv(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxHeight(),
+                    .fillMaxHeight()
+                    // The controls are disabled while nothing plays, and lose focus
+                    .then(rememberFocusReturn(controlsEnabled, playFocusRequester)),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {

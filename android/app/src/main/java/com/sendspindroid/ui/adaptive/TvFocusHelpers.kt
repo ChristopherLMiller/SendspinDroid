@@ -148,6 +148,27 @@ fun rememberFocusFallback(canFocus: Boolean, fallback: FocusRequester): Modifier
 }
 
 /**
+ * Returns focus to [target] on a TV when a group of controls that are
+ * disabled together, such as the transport controls while nothing plays, is
+ * enabled again. A disabled control cannot keep focus, so the focus the group
+ * had is lost when it is disabled, and nothing else on the screen may take
+ * it. Focus that left the group while it was enabled is not taken back. Put
+ * the returned modifier on the group.
+ */
+@Composable
+fun rememberFocusReturn(enabled: Boolean, target: FocusRequester): Modifier {
+    val isTv = LocalFormFactor.current == FormFactor.TV
+    var hadFocus by remember { mutableStateOf(false) }
+    val enabledNow by rememberUpdatedState(enabled)
+    LaunchedEffect(enabled) {
+        if (isTv && enabled && hadFocus) target.requestFocus()
+    }
+    // The focus change that disabling the group causes is ignored: it is the
+    // loss this gives back.
+    return remember { Modifier.onFocusChanged { if (enabledNow) hadFocus = it.hasFocus } }
+}
+
+/**
  * Applies the TV safe-area margins ([TvOverscanHorizontal] at the sides,
  * [TvOverscanVertical] at the top and bottom) on TV devices.
  * On non-TV devices, applies no padding.
