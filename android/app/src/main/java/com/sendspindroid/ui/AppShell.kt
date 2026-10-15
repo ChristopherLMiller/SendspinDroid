@@ -72,8 +72,8 @@ import com.sendspindroid.ui.adaptive.FormFactor
  * @param onSeek Progress bar scrub released at a position in milliseconds
  * @param onAllowPairingClick Confirm the dynamic pairing gesture gate
  * @param onDisconnectClick Disconnect from server
- * @param onAddServerClick FAB: launch add server wizard
- * @param canEditServer Whether the connection is to a saved server, which Edit Server opens
+ * @param onAddServerClick TV: the side menu's Add Server entry
+ * @param canEditServer TV: whether the connection is to a saved server, which Edit Server opens
  * @param onLeaveApp TV: Back pressed in the side menu, to leave the app
  */
 @Composable

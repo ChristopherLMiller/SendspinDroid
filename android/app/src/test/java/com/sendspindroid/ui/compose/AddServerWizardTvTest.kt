@@ -113,6 +113,17 @@ class AddServerWizardTvTest {
     }
 
     @Test
+    fun `a discovered server that goes away while focused gives focus to the address field`() {
+        showWizard(WizardState(discoveredServers = listOf(livingRoom), isSearching = true, isNextEnabled = false))
+        composeTestRule.onNodeWithText("Living Room").assertIsFocused()
+
+        state = state.copy(discoveredServers = emptyList())
+        composeTestRule.waitForIdle()
+
+        textField().assertIsFocused()
+    }
+
+    @Test
     fun `picking a discovered server marks it and moves focus to Next`() {
         showWizard(
             WizardState(discoveredServers = listOf(livingRoom, office), isSearching = true, isNextEnabled = false),

@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,6 +100,22 @@ fun FindServerStep(
             }
         }
     }
+
+    // A server's card that leaves the list while it has focus takes the focus
+    // with it, to nowhere: the address field, near the end, gets it back.
+    var focusedServer by remember { mutableStateOf<String?>(null) }
+    if (isTv) {
+        LaunchedEffect(discoveredServers) {
+            val gone = focusedServer
+            if (gone != null && discoveredServers.none { it.id == gone }) {
+                focusedServer = null
+                withFrameNanos { } // the list without it is laid out in the next frame
+                listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+                addressFocusRequester.requestFocus()
+            }
+        }
+    }
+    val currentServers by rememberUpdatedState(discoveredServers)
 
     LazyColumn(
         modifier = modifier
@@ -174,7 +191,16 @@ fun FindServerStep(
                     // card has to show that it was the one picked.
                     selected = isTv && server.address == localAddress,
                     onClick = { onServerSelected(server) },
-                    focusRequester = if (index == 0) firstServerFocusRequester else null
+                    focusRequester = if (index == 0) firstServerFocusRequester else null,
+                    modifier = Modifier.onFocusChanged {
+                        if (it.hasFocus) {
+                            focusedServer = server.id
+                        } else if (focusedServer == server.id && currentServers.any { s -> s.id == server.id }) {
+                            // Focus moved on. A card leaving the list keeps
+                            // it, for the effect above to find.
+                            focusedServer = null
+                        }
+                    }
                 )
             }
         }

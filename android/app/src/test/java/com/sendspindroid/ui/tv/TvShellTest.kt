@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performKeyInput
@@ -125,6 +126,34 @@ class TvShellTest {
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithText("Play").assertIsFocused()
+    }
+
+    @Test
+    fun `with nothing on the screen to focus the menu collapses, and a key opens it`() {
+        composeTestRule.setContent {
+            SendSpinTheme {
+                TvShell(
+                    home = TvMenuEntry("Now Playing", Icons.Default.PlayArrow),
+                    entries = emptyList(),
+                    footerEntries = emptyList(),
+                    onLeave = {}
+                ) {
+                    Text("Connecting", modifier = Modifier.padding(start = 320.dp))
+                }
+            }
+        }
+        pressBack()
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
+
+        // Choosing the screen's entry has nowhere to send focus: the menu
+        // collapses, its labels go, and focus stays on the entry
+        composeTestRule.onNodeWithText("Now Playing").performKeyInput { pressKey(Key.DirectionCenter) }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Now Playing").assertDoesNotExist()
+
+        composeTestRule.onNode(isFocused()).performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Now Playing").assertIsFocused()
     }
 
     @Test

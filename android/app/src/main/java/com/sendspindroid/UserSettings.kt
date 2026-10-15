@@ -584,7 +584,8 @@ object UserSettings {
         set(value) { prefs?.edit()?.putString(KEY_LAYOUT_MODE, value.name)?.apply() }
 
     /**
-     * Light/dark theme override. SYSTEM follows the device setting.
+     * Light/dark theme override. SYSTEM follows the device setting, except on
+     * a TV, where it means dark (see [nightMode]).
      */
     enum class ThemeMode(private val nightMode: Int) {
         SYSTEM(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM),

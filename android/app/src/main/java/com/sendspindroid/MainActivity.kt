@@ -121,8 +121,9 @@ class MainActivity : AppCompatActivity() {
     // Connection state machine - starts with ServerList (shows immediately on startup)
     private var connectionState: AppConnectionState = AppConnectionState.ServerList
 
-    // Track the currently connected server ID for editing. Compose state, so
-    // the TV menu offers Edit Server only while there is a server to edit.
+    // Track the currently connected server ID for editing: null while not
+    // connected, or connected to a server that dialled in. Compose state, so
+    // the TV menu offers Edit Server only while there is a saved server to edit.
     private var currentConnectedServerId: String? by mutableStateOf(null)
 
     // NsdManager-based discovery (Android native - more reliable than Go's hashicorp/mdns)
@@ -597,6 +598,8 @@ class MainActivity : AppCompatActivity() {
                 else -> detectedFormFactor
             }
 
+            val savedServers by UnifiedServerRepository.savedServers.collectAsStateWithLifecycle()
+
             SendSpinTheme {
                 ProvideFormFactor(formFactor) {
                     AppShell(
@@ -652,8 +655,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         },
                         onExitAppClick = { onExitAppClicked() },
-                        canEditServer = currentConnectedServerId
-                            ?.let { UnifiedServerRepository.getServer(it) } != null,
+                        canEditServer = savedServers.any { it.id == currentConnectedServerId },
                         // As Android 12 and later do for the launcher's activity: the
                         // app keeps its state and keeps playing.
                         onLeaveApp = { moveTaskToBack(true) }
@@ -1252,7 +1254,10 @@ class MainActivity : AppCompatActivity() {
                     is AppConnectionState.Reconnecting -> currentState.serverAddress
                     // A server connected to us: there is no saved server
                     // behind the connection.
-                    is AppConnectionState.ServerList -> ""
+                    is AppConnectionState.ServerList -> {
+                        currentConnectedServerId = null
+                        ""
+                    }
                     else -> {
                         Log.w(TAG, "STATE_CONNECTED received in unexpected state: $currentState, using serverId fallback")
                         currentConnectedServerId ?: ""
@@ -1303,6 +1308,7 @@ class MainActivity : AppCompatActivity() {
                 Log.d(TAG, "Disconnected from server")
 
                 connectionState = AppConnectionState.ServerList
+                currentConnectedServerId = null
                 // Sync state to ViewModel for Compose UI
                 viewModel.updateConnectionState(connectionState)
                 viewModel.resetPlaybackState()
@@ -1315,6 +1321,7 @@ class MainActivity : AppCompatActivity() {
                 Log.e(TAG, "Connection error: $errorMessage")
 
                 connectionState = AppConnectionState.Error(errorMessage)
+                currentConnectedServerId = null
                 // Sync state to ViewModel for Compose UI
                 viewModel.updateConnectionState(connectionState)
                 showServerListView()

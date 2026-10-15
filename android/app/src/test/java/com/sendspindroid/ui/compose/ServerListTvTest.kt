@@ -181,6 +181,22 @@ class ServerListTvTest {
     }
 
     @Test
+    fun `on a TV a found server that goes away while focused gives focus back to Add`() {
+        discovered.value = listOf(kitchen)
+        show(searching = true)
+        val modeButton = composeTestRule.onNodeWithText("Wait for a server to connect instead")
+        modeButton.requestFocus()
+        modeButton.performKeyInput { pressKey(Key.DirectionDown) }
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithText("Kitchen Server").assertIsFocused()
+
+        discovered.value = emptyList()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText("Add Your First Server").assertIsFocused()
+    }
+
+    @Test
     fun `on a TV the list takes focus when its first server is saved`() {
         show()
         composeTestRule.onNodeWithText("Add Your First Server").assertIsFocused()

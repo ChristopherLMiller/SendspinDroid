@@ -97,7 +97,7 @@ private val RingWidth = 3.dp
  * focus target; that would make the element two D-pad stops. Use
  * [tvFocusRing] there.
  *
- * On other form factors it only adds focusable().
+ * On other form factors it only attaches [focusRequester] and adds focusable().
  */
 fun Modifier.tvFocusable(
     focusRequester: FocusRequester? = null,

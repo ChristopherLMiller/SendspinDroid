@@ -28,6 +28,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
@@ -40,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -89,6 +92,31 @@ fun ServerListEmptyState(
     // into view.
     var addTakesFocus by remember { mutableStateOf(isTv) }
 
+    // A found server's card that leaves the list while it has focus takes the
+    // focus with it, to nowhere: Add Your First Server gets it back.
+    val listState = rememberLazyListState()
+    var focusedServer by remember { mutableStateOf<String?>(null) }
+    if (isTv) {
+        LaunchedEffect(discoveredServers) {
+            val gone = focusedServer
+            if (gone != null && discoveredServers.none { it.id == gone }) {
+                focusedServer = null
+                listState.scrollToItem(0)
+                addTakesFocus = true
+            }
+        }
+    }
+    val currentServers by rememberUpdatedState(discoveredServers)
+    val trackFocus: (String, Boolean) -> Unit = { id, hasFocus ->
+        if (hasFocus) {
+            focusedServer = id
+        } else if (focusedServer == id && currentServers.any { it.id == id }) {
+            // Focus moved on. A card leaving the list keeps it, for the
+            // effect above to find.
+            focusedServer = null
+        }
+    }
+
     // In landscape the hero card is as tall as the screen, which would leave
     // the servers that were found below the fold with nothing to say they
     // are there. They go beside it instead. Not on a TV, where the hero is
@@ -125,6 +153,7 @@ fun ServerListEmptyState(
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
+        state = listState,
         horizontalAlignment = Alignment.CenterHorizontally,
         contentPadding = contentPadding
     ) {
@@ -151,7 +180,7 @@ fun ServerListEmptyState(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            discoveredServerItems(discoveredServers, onQuickConnectClick)
+            discoveredServerItems(discoveredServers, onQuickConnectClick, onFocusChanged = trackFocus)
         }
     }
 }
@@ -160,6 +189,7 @@ fun ServerListEmptyState(
 private fun LazyListScope.discoveredServerItems(
     discoveredServers: List<UnifiedServer>,
     onQuickConnectClick: (UnifiedServer) -> Unit,
+    onFocusChanged: (id: String, hasFocus: Boolean) -> Unit = { _, _ -> },
 ) {
     item(key = "quick_connect_header") {
         val formFactor = LocalFormFactor.current
@@ -212,7 +242,8 @@ private fun LazyListScope.discoveredServerItems(
                 onLongClick = { /* no-op for quick connect */ },
                 onQuickConnectClick = { onQuickConnectClick(server) },
                 // No menu here, so nothing for a More button to open on a TV
-                showMoreButton = false
+                showMoreButton = false,
+                modifier = Modifier.onFocusChanged { onFocusChanged(server.id, it.hasFocus) }
             )
         }
     }
@@ -362,7 +393,7 @@ private fun HeroActions(
     val formFactor = LocalFormFactor.current
     val buttonShape = RoundedCornerShape(16.dp)
 
-    // Primary CTA — Add Server
+    // Primary CTA - Add Server
     FilledTonalButton(
         onClick = onAddServerClick,
         modifier = Modifier

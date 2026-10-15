@@ -14,18 +14,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -69,6 +64,10 @@ class TvMenuEntry(
  * a dialog or another screen it opens is closed. Back in the open menu calls
  * [onLeave].
  *
+ * A screen with nothing to focus, such as one waiting for a server, leaves
+ * focus in the menu. The menu stays collapsed then, so the screen is not
+ * dimmed, and opens at the first key; closing it only collapses it again.
+ *
  * @param home The screen being shown, first and selected.
  * @param entries Actions, below [home].
  * @param footerEntries Entries kept at the bottom, such as Settings.
@@ -90,18 +89,17 @@ fun TvShell(
     val menuOpen = drawerState.currentValue == DrawerValue.Open
     val homeEntry = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
-    val openMenu = { homeEntry.requestFocus() }
+    // The drawer opens and closes as focus enters and leaves it, but focus
+    // that is already in it does not enter it again: these set it too.
+    val openMenu = {
+        homeEntry.requestFocus()
+        drawerState.setValue(DrawerValue.Open)
+    }
     // As D-pad Right does. Restoring what had focus on the screen is not
     // reliable in Compose 1.7: restored into a lazy list, the focus can end up
     // on the list itself, with nothing focused that the user can see.
-    val closeMenu: () -> Unit = { focusManager.moveFocus(FocusDirection.Right) }
-
-    // When a screen focuses nothing of its own, the platform gives focus to
-    // the first entry of the menu before the drawer follows its focus, and
-    // the entry would show focused in a collapsed menu: open it.
-    var menuHasFocus by remember { mutableStateOf(false) }
-    LaunchedEffect(menuHasFocus) {
-        if (menuHasFocus && drawerState.currentValue == DrawerValue.Closed) drawerState.setValue(DrawerValue.Open)
+    val closeMenu: () -> Unit = {
+        if (!focusManager.moveFocus(FocusDirection.Right)) drawerState.setValue(DrawerValue.Closed)
     }
 
     // Back first takes the user to the menu, and only Back there leaves:
@@ -127,7 +125,12 @@ fun TvShell(
                         .fillMaxHeight()
                         .background(if (value == DrawerValue.Open) menuBackground else Color.Transparent)
                         .padding(horizontal = RailPadding, vertical = TvOverscanVertical)
-                        .onFocusChanged { menuHasFocus = it.hasFocus }
+                        // Focus in the collapsed menu: the first key opens it
+                        .onPreviewKeyEvent { event ->
+                            val opens = drawerState.currentValue == DrawerValue.Closed && event.key in MenuKeys
+                            if (opens && event.type == KeyEventType.KeyDown) drawerState.setValue(DrawerValue.Open)
+                            opens
+                        }
                         .focusProperties { enter = { homeEntry } }
                         .focusGroup()
                         .selectableGroup(),
@@ -159,6 +162,12 @@ fun TvShell(
         }
     }
 }
+
+/** The keys that move or act in the menu: Back has handlers of its own. */
+private val MenuKeys = setOf(
+    Key.DirectionUp, Key.DirectionDown, Key.DirectionLeft, Key.DirectionRight,
+    Key.DirectionCenter, Key.Enter, Key.NumPadEnter,
+)
 
 private val RailPadding = 12.dp
 
