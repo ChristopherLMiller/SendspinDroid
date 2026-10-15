@@ -14,13 +14,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -87,6 +92,14 @@ fun TvShell(
     val openMenu = { homeEntry.requestFocus() }
     val closeMenu = { screen.requestFocus() }
 
+    // When a screen focuses nothing of its own, the platform gives focus to
+    // the first entry of the menu before the drawer follows its focus, and
+    // the entry would show focused in a collapsed menu: open it.
+    var menuHasFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(menuHasFocus) {
+        if (menuHasFocus && drawerState.currentValue == DrawerValue.Closed) drawerState.setValue(DrawerValue.Open)
+    }
+
     // Back first takes the user to the menu, and only Back there leaves:
     // the Android TV pattern for an app with a left-side menu.
     BackHandler(enabled = !menuOpen) { openMenu() }
@@ -117,6 +130,7 @@ fun TvShell(
                             if (right && event.type == KeyEventType.KeyDown) closeMenu()
                             right
                         }
+                        .onFocusChanged { menuHasFocus = it.hasFocus }
                         .focusProperties { enter = { homeEntry } }
                         .focusGroup()
                         .selectableGroup(),

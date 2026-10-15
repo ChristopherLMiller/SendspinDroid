@@ -453,6 +453,10 @@ class MainActivity : AppCompatActivity() {
             }
             .setCancelable(false)
             .show()
+        // On a TV the field would take focus and open the keyboard over the
+        // dialog. Continue takes it, as a phone shows the dialog: OK keeps
+        // the name, and Up then OK on the field changes it.
+        dialog.focusButtonOnTv(DialogInterface.BUTTON_POSITIVE)
         // Done does what Continue does: with the keyboard up in landscape the
         // dialog's buttons can be out of reach.
         nameField.setOnEditorActionListener { _, actionId, _ ->
@@ -1781,7 +1785,7 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.disconnect_dialog_negative, null)
             .show()
-            .focusCancelOnTv()
+            .focusButtonOnTv(DialogInterface.BUTTON_NEGATIVE)
     }
 
     /**
@@ -1827,16 +1831,16 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.disconnect_dialog_negative, null)
             .show()
-            .focusCancelOnTv()
+            .focusButtonOnTv(DialogInterface.BUTTON_NEGATIVE)
     }
 
     /**
-     * On a TV, starts a confirmation with focus on Cancel. Without it the
-     * dialog focuses its message, which shows nothing, so the first press of
-     * OK seems to do nothing.
+     * On a TV, starts a dialog with focus on one of its buttons, [which]: a
+     * confirmation on Cancel. Without it a dialog focuses its message, which
+     * shows nothing, so the first press of OK seems to do nothing.
      */
-    private fun androidx.appcompat.app.AlertDialog.focusCancelOnTv() {
-        if (isTvDevice) getButton(DialogInterface.BUTTON_NEGATIVE)?.requestFocus()
+    private fun androidx.appcompat.app.AlertDialog.focusButtonOnTv(which: Int) {
+        if (isTvDevice) getButton(which)?.requestFocus()
     }
 
     /**
