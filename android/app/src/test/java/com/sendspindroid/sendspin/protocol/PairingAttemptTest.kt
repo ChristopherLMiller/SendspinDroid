@@ -301,6 +301,41 @@ class PairingAttemptTest {
         assertEquals(1, handler.abandonments)
     }
 
+    @Test
+    fun `an activation after our own abort of a dynamic attempt does not abandon it`() {
+        // The abort already ended the attempt and said why: "The code
+        // entered on ... did not match" must not be replaced.
+        val handler = mismatchedAttempt()
+
+        handler.receive(leavePairing)
+
+        assertEquals(0, handler.abandonments)
+    }
+
+    @Test
+    fun `an activation after the server's abort of a dynamic attempt does not abandon it`() {
+        val handler = handler(PskCategory.SENTINEL)
+        handler.receive(pairingActivateJson(dynamic))
+        handler.receive(serverPairInit())
+        handler.receive("""{"type":"pair/abort","payload":{"reason":"user_cancelled"}}""")
+
+        handler.receive(leavePairing)
+
+        assertEquals(0, handler.abandonments)
+    }
+
+    @Test
+    fun `a dynamic attempt is abandoned once, not again by a later activation`() {
+        val handler = handler(PskCategory.SENTINEL)
+        handler.receive(pairingActivateJson(dynamic))
+        handler.receive(serverPairInit())
+        handler.receive(leavePairing)
+
+        handler.receive(leavePairing)
+
+        assertEquals(1, handler.abandonments)
+    }
+
     // ========== Local cancel ==========
 
     @Test
