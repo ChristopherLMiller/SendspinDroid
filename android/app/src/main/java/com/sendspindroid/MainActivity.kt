@@ -573,14 +573,21 @@ class MainActivity : AppCompatActivity() {
                 windowSizeClass = windowSizeClass,
                 isTv = isTvDevice
             )
-            // Observe layout mode reactively so changes in Settings take effect immediately
+            // Observe layout mode and Album colors reactively so changes in
+            // Settings take effect immediately
             val layoutModeState = remember {
                 mutableStateOf(UserSettings.layoutMode)
+            }
+            val serverColorsEnabled = remember {
+                mutableStateOf(UserSettings.serverColors)
             }
             DisposableEffect(Unit) {
                 val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
                     if (key == UserSettings.KEY_LAYOUT_MODE) {
                         layoutModeState.value = UserSettings.layoutMode
+                    }
+                    if (key == UserSettings.KEY_SERVER_COLORS) {
+                        serverColorsEnabled.value = UserSettings.serverColors
                     }
                 }
                 PreferenceManager.getDefaultSharedPreferences(this@MainActivity)
@@ -660,7 +667,9 @@ class MainActivity : AppCompatActivity() {
                         // As Android 12 and later do for the launcher's activity: the
                         // app keeps its state and keeps playing.
                         onLeaveApp = { moveTaskToBack(true) },
-                        serverColors = serverColors
+                        // Off, a connection made before the switch still
+                        // receives them until it ends
+                        serverColors = serverColors.takeIf { serverColorsEnabled.value }
                     )
                 }
             }

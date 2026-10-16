@@ -98,4 +98,17 @@ class MainActivityServerColorsTest {
 
         assertEquals(background, activity.nowPlayingBackground())
     }
+
+    @Test
+    fun `the Album colors switch takes effect at once`() {
+        val activity = connected()
+        relayed.value = palette
+        assertEquals(background, activity.nowPlayingBackground())
+
+        UserSettings.serverColors = false
+        assertNotEquals(background, activity.nowPlayingBackground())
+
+        UserSettings.serverColors = true
+        assertEquals(background, activity.nowPlayingBackground())
+    }
 }
