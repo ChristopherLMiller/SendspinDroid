@@ -210,7 +210,7 @@
     <string name="paired_server_forget_title">Forget %1$s?</string>
     <string name="paired_server_forget_message">This removes the pairing on this device only. The server will still list this player and will not connect until you pair again. If this server is connected now, the connection ends.</string>
     <string name="pref_dynamic_pairing_code_title">Dynamic pairing code</string>
-    <string name="pref_dynamic_pairing_code_summary">Most servers do not support this pairing method yet. Turning it on may prevent connecting to older servers.</string>
+    <string name="pref_dynamic_pairing_code_summary">Pair by typing a 6-digit code shown on this device into the server, instead of the pairing token. Experimental.</string>
     <string name="debug_share_chooser_title">Share Debug Log</string>
     <string name="debug_log_exported">Debug log exported</string>
     <string name="debug_log_export_failed">Failed to export debug log</string>
