@@ -257,7 +257,7 @@ class MessageParserTest {
     }
 
     @Test
-    fun parseServerState_nonIntegerYearAndTrack_readAsNoValue() {
+    fun parseServerState_fractionalOrNonNumericYearAndTrack_readAsNoValue() {
         // roles/metadata/v1.md: "`year?`: integer" and "`track?`: integer".
         val payload = buildJsonObject {
             put("metadata", buildJsonObject {
