@@ -218,8 +218,12 @@ class MessageParserTest {
         assertEquals(42L, metadata!!.timestamp)
         assertNull(metadata.title)
         assertNull(metadata.artist)
+        assertNull(metadata.albumArtist)
         assertNull(metadata.album)
         assertNull(metadata.artworkUrl)
+        // No 0 or "" stands in for an absent year or track number.
+        assertNull(metadata.year)
+        assertNull(metadata.track)
         assertNull("omitting progress clears the position", metadata.progress)
     }
 
@@ -246,8 +250,29 @@ class MessageParserTest {
         assertEquals(9730008767707L, metadata!!.timestamp)
         assertNull(metadata.title)
         assertNull(metadata.artist)
+        assertNull(metadata.albumArtist)
         assertNull(metadata.year)
+        assertNull(metadata.track)
         assertNull(metadata.progress)
+    }
+
+    @Test
+    fun parseServerState_nonIntegerYearAndTrack_readAsNoValue() {
+        // roles/metadata/v1.md: "`year?`: integer" and "`track?`: integer".
+        val payload = buildJsonObject {
+            put("metadata", buildJsonObject {
+                put("timestamp", 1L)
+                put("title", "Song")
+                put("year", 1975.5)
+                put("track", "five")
+            })
+        }
+
+        val metadata = MessageParser.parseServerState(payload).metadata
+
+        assertEquals("Song", metadata!!.title)
+        assertNull(metadata.year)
+        assertNull(metadata.track)
     }
 
     @Test
