@@ -599,6 +599,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             val savedServers by UnifiedServerRepository.savedServers.collectAsStateWithLifecycle()
+            val serverColors by PlaybackService.serverColors.collectAsStateWithLifecycle()
 
             SendSpinTheme {
                 ProvideFormFactor(formFactor) {
@@ -658,7 +659,8 @@ class MainActivity : AppCompatActivity() {
                         canEditServer = savedServers.any { it.id == currentConnectedServerId },
                         // As Android 12 and later do for the launcher's activity: the
                         // app keeps its state and keeps playing.
-                        onLeaveApp = { moveTaskToBack(true) }
+                        onLeaveApp = { moveTaskToBack(true) },
+                        serverColors = serverColors
                     )
                 }
             }
