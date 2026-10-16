@@ -175,6 +175,7 @@ object SendSpinProtocol {
         const val SERVER_PAIR_AUTH = "server/pair-auth"
         const val CLIENT_PAIR_CONFIRM = "client/pair-confirm"
         const val SERVER_PAIR_CONFIRM = "server/pair-confirm"
+        const val CLIENT_PAIR_RETRY = "client/pair-retry"
         const val CLIENT_PAIR_FINALIZE = "client/pair-finalize"
         const val SERVER_PAIR_FINALIZE = "server/pair-finalize"
         const val CLIENT_TIME = "client/time"
