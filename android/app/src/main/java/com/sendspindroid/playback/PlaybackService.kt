@@ -1566,7 +1566,10 @@ class PlaybackService : MediaLibraryService() {
             artist = state.artist,
             album = state.album,
             artwork = bitmap,
-            artworkUri = state.artworkUrl?.let { Uri.parse(it) }
+            artworkUri = state.artworkUrl?.let { Uri.parse(it) },
+            albumArtist = state.albumArtist,
+            year = state.year,
+            trackNumber = state.track
         )
 
         broadcastMetadataToControllers(
@@ -1588,7 +1591,10 @@ class PlaybackService : MediaLibraryService() {
             artist = state.artist,
             album = state.album,
             artwork = effectiveArtwork,
-            artworkUri = state.artworkUrl?.let { Uri.parse(it) }
+            artworkUri = state.artworkUrl?.let { Uri.parse(it) },
+            albumArtist = state.albumArtist,
+            year = state.year,
+            trackNumber = state.track
         )
 
         broadcastMetadataToControllers(
