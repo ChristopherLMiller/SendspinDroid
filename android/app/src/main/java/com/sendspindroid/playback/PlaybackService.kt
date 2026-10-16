@@ -515,6 +515,9 @@ class PlaybackService : MediaLibraryService() {
         const val EXTRA_POSITION_UPDATED_AT = "position_updated_at"
         const val EXTRA_PLAYBACK_SPEED = "playback_speed"
         const val EXTRA_ARTWORK_DATA = "artwork_data"
+        // Present only when the track has one: no "" or 0 stands in for none
+        const val EXTRA_ALBUM_ARTIST = "album_artist"
+        const val EXTRA_YEAR = "year"
 
         // Session extras keys for connection state
         const val EXTRA_CONNECTION_STATE = "connection_state"
@@ -1703,6 +1706,8 @@ class PlaybackService : MediaLibraryService() {
             putLong(EXTRA_POSITION_MS, playbackState.positionMs)
             putLong(EXTRA_POSITION_UPDATED_AT, playbackState.positionUpdatedAt)
             putInt(EXTRA_PLAYBACK_SPEED, playbackState.playbackSpeed)
+            playbackState.albumArtist?.let { putString(EXTRA_ALBUM_ARTIST, it) }
+            playbackState.year?.let { putInt(EXTRA_YEAR, it) }
 
             // Group info
             playbackState.groupName?.let { putString(EXTRA_GROUP_NAME, it) }

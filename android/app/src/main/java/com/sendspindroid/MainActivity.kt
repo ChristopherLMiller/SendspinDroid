@@ -1176,7 +1176,14 @@ class MainActivity : AppCompatActivity() {
 
         if (title.isNotEmpty() || artist.isNotEmpty() || album.isNotEmpty()) {
             Log.d(TAG, "Metadata changed: $title / $artist (artwork: $artworkUrl)")
-            viewModel.updateMetadata(title, artist, album)
+            // Both keys are left out when the track has none
+            viewModel.updateMetadata(
+                title,
+                artist,
+                album,
+                extras.getString(PlaybackService.EXTRA_ALBUM_ARTIST),
+                if (extras.containsKey(PlaybackService.EXTRA_YEAR)) extras.getInt(PlaybackService.EXTRA_YEAR) else null
+            )
 
             if (artworkUrl.isNotEmpty()) {
                 viewModel.updateArtwork(ArtworkSource.Url(artworkUrl))
@@ -1424,7 +1431,15 @@ class MainActivity : AppCompatActivity() {
                 val artist = mediaMetadata.artist?.toString() ?: ""
                 val album = mediaMetadata.albumTitle?.toString() ?: ""
                 Log.d(TAG, "Metadata from service: $title / $artist / $album")
-                viewModel.updateMetadata(title, artist, album)
+                // The session's album artist is the track artist when the
+                // server sends none, which Now Playing does not repeat.
+                viewModel.updateMetadata(
+                    title,
+                    artist,
+                    album,
+                    mediaMetadata.albumArtist?.toString(),
+                    mediaMetadata.releaseYear
+                )
 
                 // Load album art from MediaMetadata
                 updateAlbumArt(mediaMetadata)
@@ -1495,7 +1510,9 @@ class MainActivity : AppCompatActivity() {
                 viewModel.updateMetadata(
                     metadata.title?.toString() ?: "",
                     metadata.artist?.toString() ?: "",
-                    metadata.albumTitle?.toString() ?: ""
+                    metadata.albumTitle?.toString() ?: "",
+                    metadata.albumArtist?.toString(),
+                    metadata.releaseYear
                 )
                 updateAlbumArt(metadata)
             }
