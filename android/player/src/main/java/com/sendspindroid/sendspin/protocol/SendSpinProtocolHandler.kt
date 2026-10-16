@@ -1830,8 +1830,10 @@ abstract class SendSpinProtocolHandler(
                 // The attempt timer keeps running across rounds: "A retry
                 // keeps the attempt, its pairing code, and its running
                 // attempt timeout in place".
-                DynamicPairingAction.SendPairRetry ->
+                DynamicPairingAction.SendPairRetry -> {
+                    Log.i(tag, "Dynamic pairing: server_kc did not verify; sending client/pair-retry")
                     sendProtocolMessage(MessageBuilder.buildClientPairRetry())
+                }
 
                 is DynamicPairingAction.SendPairConfirm ->
                     sendProtocolMessage(
