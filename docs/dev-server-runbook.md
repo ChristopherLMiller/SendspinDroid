@@ -178,6 +178,26 @@ state offers both, it sends one of each, built by the app's
 `MessageBuilder.buildCommand`. The server log must then show a
 `ControllerSeekEvent` and a `ControllerSeekRelativeEvent`.
 
+`--send-test-metadata` makes the server send three tracks' metadata to the
+first client with a metadata role, 15 s apart, and then clear it, logging a
+`test metadata:` line for each step:
+
+1. A compilation track: artist "Queen", album artist "Various Artists",
+   album "Now 44", year 1999, track 7.
+2. An album by the track's own artist: album artist "Queen", album "A Night
+   at the Opera", year 1975, track 9.
+3. "Radio Edit" by Queen on "Singles", with no `album_artist`, `year` or
+   `track`, which the server then leaves out of the message.
+4. A clear: a metadata object with only a timestamp.
+
+It is for checking a device, which has 15 s at each step to be inspected,
+for example with `adb shell dumpsys media_session`. At step 3 the app must
+keep no year or track number from step 2; on its media session the album
+artist then falls back to the track artist. The steps run before the
+`--play-test-audio` stream when both are given. `NoiseHandshakeCheck` does not
+check metadata, but with `--hold-seconds=70` it prints each `server/state` as
+it arrives.
+
 ### Pairing without an operator
 
 With `--pair` the tool runs the pairing instead of declining it, through the

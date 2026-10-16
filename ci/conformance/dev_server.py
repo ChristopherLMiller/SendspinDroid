@@ -40,6 +40,7 @@ try:
     from aiosendspin.noise.pairing_token import decode_psk_token
     from aiosendspin.noise.trust_store import FileServerPairingStore
     from aiosendspin.server.roles.controller.events import ControllerEvent
+    from aiosendspin.server.roles.metadata import Metadata
     from aiosendspin.server.server import SendspinServer
     from PIL import Image
 except ImportError:  # pragma: no cover - environment guidance, not logic
@@ -379,6 +380,57 @@ class DevServer:
             await asyncio.sleep(2.0)
         LOGGER.info("test artwork: done")
 
+    async def send_test_metadata(self) -> None:
+        """Send three tracks' metadata to the first metadata client, then clear it.
+
+        A compilation track, whose album artist differs from its artist; an
+        album by the track's own artist; and a track without album_artist,
+        year or track, which aiosendspin then leaves out of the message. Each
+        step is held for 15 s, so a device can be inspected at every one.
+        """
+        assert self._server is not None
+        while True:
+            target = next(
+                (
+                    client
+                    for client in self._server.connected_clients
+                    if client.roles_by_family("metadata")
+                ),
+                None,
+            )
+            if target is not None:
+                break
+            await asyncio.sleep(0.5)
+        metadata = target.group.group_role("metadata")
+        for step in (
+            Metadata(
+                title="Bohemian Rhapsody", artist="Queen", album_artist="Various Artists",
+                album="Now 44", year=1999, track=7,
+                track_progress=0, track_duration=354000, playback_speed=1000,
+            ),
+            Metadata(
+                title="Love of My Life", artist="Queen", album_artist="Queen",
+                album="A Night at the Opera", year=1975, track=9,
+                track_progress=0, track_duration=219000, playback_speed=1000,
+            ),
+            Metadata(
+                title="Radio Edit", artist="Queen", album="Singles",
+                track_progress=0, track_duration=180000, playback_speed=1000,
+            ),
+            None,
+        ):
+            LOGGER.info(
+                "test metadata: %s",
+                "clear"
+                if step is None
+                else f"title={step.title!r} artist={step.artist!r} "
+                f"album_artist={step.album_artist!r} album={step.album!r} "
+                f"year={step.year} track={step.track}",
+            )
+            metadata.set_metadata(step)
+            await asyncio.sleep(15.0)
+        LOGGER.info("test metadata: done")
+
     async def pair_with_token(self, token_file: Path) -> None:
         """Pair, by Pairing PSK, with the client whose token is in `token_file`.
 
@@ -637,6 +689,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="send two album artwork images, then a clear, to the first artwork client",
     )
     parser.add_argument(
+        "--send-test-metadata",
+        action="store_true",
+        help="send three tracks' metadata, 15 s apart, then a clear, to the first "
+        "metadata client",
+    )
+    parser.add_argument(
         "--offer-seek",
         type=int,
         default=None,
@@ -698,6 +756,8 @@ async def run(args: argparse.Namespace) -> int:
             await server.offer_seek(args.offer_seek)
         if args.send_test_artwork:
             await server.send_test_artwork()
+        if args.send_test_metadata:
+            await server.send_test_metadata()
         if args.play_test_audio:
             await server.play_test_audio(args.play_test_audio)
         if args.pair_token_file:
@@ -708,8 +768,8 @@ async def run(args: argparse.Namespace) -> int:
             )
 
     test_audio = None
-    if (args.offer_seek is not None or args.send_test_artwork or args.play_test_audio
-            or args.pair_token_file or args.pair_dynamic_code_file):
+    if (args.offer_seek is not None or args.send_test_artwork or args.send_test_metadata
+            or args.play_test_audio or args.pair_token_file or args.pair_dynamic_code_file):
         test_audio = asyncio.create_task(scripted())
         test_audio.add_done_callback(
             lambda task: task.cancelled() or task.exception() is None
