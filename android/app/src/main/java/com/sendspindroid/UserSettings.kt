@@ -493,12 +493,16 @@ object UserSettings {
     /**
      * Whether High Power Mode is enabled.
      * When enabled (for always-on/plugged-in devices):
-     * - WiFi and CPU locks held for entire connection (not just streaming)
+     * - WiFi and CPU locks held for entire connection (not just streaming),
+     *   and kept while it reconnects
      * - WiFi lock uses low-latency mode (API 29+)
-     * - Screen kept on while connected
-     * - Infinite reconnection attempts (30s steady-state interval)
-     * - Faster WebSocket ping (15s vs 30s) for quicker drop detection
-     * - Prompts user to exempt app from battery optimization
+     * - Screen kept on while connected or reconnecting, on MainActivity's window
+     * - Faster WebSocket ping (15s vs 30s, read through AppSendSpinHost) for
+     *   quicker drop detection
+     * - Settings offers to exempt the app from battery optimization
+     *
+     * Reconnecting is the same either way: no attempt cap, backing off to one
+     * attempt a minute (ConnectionCoordinator).
      */
     val highPowerMode: Boolean
         get() = prefs?.getBoolean(KEY_HIGH_POWER_MODE, false) ?: false
