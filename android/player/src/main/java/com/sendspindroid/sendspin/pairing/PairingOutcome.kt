@@ -31,6 +31,16 @@ sealed interface PairingOutcome {
         override val atMs: Long = System.currentTimeMillis(),
     ) : PairingOutcome
 
+    /**
+     * The server ended the attempt with a `server/activate` and no
+     * `pair/abort`: "On receipt the client abandons the attempt, discarding
+     * all pairing state". Nothing was persisted.
+     */
+    data class Abandoned(
+        override val server: String,
+        override val atMs: Long = System.currentTimeMillis(),
+    ) : PairingOutcome
+
     /** `server/unpair`: the server dropped its pairing with this device. */
     data class Unpaired(
         override val server: String,

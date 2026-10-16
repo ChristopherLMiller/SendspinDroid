@@ -44,7 +44,7 @@ import com.sendspindroid.ui.theme.SendSpinTheme
  * render.
  *
  * @param lastFailure what happened to the last pairing attempt, if it did
- *   not finish.
+ *   not finish. Not shown while a new attempt's code or gesture prompt is.
  */
 @Composable
 fun AdmissionNotice(
@@ -127,8 +127,10 @@ fun AdmissionNotice(
 
         // Why the last pairing attempt did not finish. In either state: a
         // server that gives up on a pairing goes back to waiting for
-        // approval, and this is still why the player cannot play.
-        if (lastFailure != null) {
+        // approval, and this is still why the player cannot play. Not over a
+        // code or the gesture prompt: those belong to a new attempt, and the
+        // old one's "start pairing again" would contradict them.
+        if (lastFailure != null && !showingCode && !showingGesture) {
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = lastFailure,

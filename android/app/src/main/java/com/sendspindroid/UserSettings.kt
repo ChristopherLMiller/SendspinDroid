@@ -348,9 +348,8 @@ object UserSettings {
         sensitivePrefs?.edit()?.putBoolean(KEY_UNPAIRED_ACCESS, enabled)?.commit() ?: false
 
     /**
-     * Whether the `dynamic_pairing_code` method is offered. Default false: most
-     * servers do not yet support this method, and advertising it unconditionally
-     * can prevent connecting at all.
+     * Whether the `dynamic_pairing_code` method is offered. Default false until
+     * the flow has been tested on a device against an rc1 server (#220).
      */
     fun getDynamicPairingCodeEnabled(): Boolean =
         sensitivePrefs?.getBoolean(KEY_DYNAMIC_PAIRING_CODE_ENABLED, false) ?: false

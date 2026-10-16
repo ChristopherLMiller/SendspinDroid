@@ -44,9 +44,8 @@ import androidx.compose.ui.unit.sp
 import com.sendspindroid.R
 import com.sendspindroid.ui.main.components.AdmissionNotice
 import com.sendspindroid.sendspin.pairing.PairedServers
-import com.sendspindroid.sendspin.pairing.PairingOutcome
 import com.sendspindroid.sendspin.protocol.AdmissionState
-import com.sendspindroid.ui.settings.message
+import com.sendspindroid.ui.settings.unfinishedMessage
 import com.sendspindroid.model.AppConnectionState
 import com.sendspindroid.ui.adaptive.AdaptiveDefaults
 import com.sendspindroid.ui.adaptive.FormFactor
@@ -144,8 +143,7 @@ fun NowPlayingScreen(
             gestureRequested = pairingGestureRequested,
             onOpenPairingClick = onOpenPairingClick,
             onAllowPairingClick = onAllowPairingClick,
-            lastFailure = (lastPairingOutcome as? PairingOutcome.Aborted)
-                ?.message(LocalContext.current.resources),
+            lastFailure = lastPairingOutcome?.unfinishedMessage(LocalContext.current.resources),
             modifier = modifier
         )
         return

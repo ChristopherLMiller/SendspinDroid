@@ -524,9 +524,8 @@ class SendSpin(
     /**
      * The live configuration, not a constant. `pairing_psk` is always offered.
      *
-     * `dynamic_pairing_code` is opt-in and defaults off: there is no capability
-     * signal in `server/hello` to test for it, and advertising it unconditionally
-     * broke the handshake against aiosendspin 9.1.1 (see
+     * `dynamic_pairing_code` is opt-in and defaults off until it has been tested
+     * on a device against an rc1 server (see
      * [PairingConfig.dynamicPairingCodeEnabled]).
      */
     override fun offeredPairMethods(): Set<String> = buildSet {
@@ -558,6 +557,10 @@ class SendSpin(
 
     override fun onPairingAborted(reason: String, sentByUs: Boolean) {
         host.onPairingOutcome(PairingOutcome.Aborted(reason, sentByUs, serverLabel()))
+    }
+
+    override fun onPairingAbandoned() {
+        host.onPairingOutcome(PairingOutcome.Abandoned(serverLabel()))
     }
 
     /**
