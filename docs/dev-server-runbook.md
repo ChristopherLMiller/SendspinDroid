@@ -128,11 +128,23 @@ CPace exchange keyed by that code -- never by transmitting the code itself.
      without closing the WebSocket. Confirm the tablet's connection stays
      healthy across that transition rather than dropping.
 
-A wrong code makes the client send `pair/abort` with reason
-`pairing_code_mismatch` and stop showing the code. The attempt is over (the
-client runs a single round and does not send `client/pair-retry`); the
-connection stays open, and `pair-dynamic` again starts a new attempt with a new
-code.
+A wrong code makes the client send `client/pair-retry` and keep showing the
+same code: the console prompts again within the same attempt, and the right
+code then pairs. The attempt timeout (two minutes from `client/pair-init`)
+keeps running across these rounds.
+
+After 20 rounds since the last code that verified - the round limit - the
+client sends `pair/abort` with reason `pairing_code_mismatch` instead, and
+stops showing the code. The connection stays open, but the next `pair-dynamic`
+is held back: the server logs `client held the attempt back
+(client/pair-pending)` and the device shows Allow pairing. Tapping it resets
+the count and shows a new code. aiosendspin waits six minutes for that tap
+before it gives the attempt up.
+
+`pair-dynamic wrong=N` enters `000000` in the first N rounds without
+prompting, so `pair-dynamic wrong=20` reaches the round limit at once. The
+count survives an app restart; only a code that verifies, or Allow pairing,
+resets it.
 
 ## Verifying the wire end to end
 
@@ -198,14 +210,27 @@ python ci/conformance/dev_server.py --host 127.0.0.1 --port 18931 \
 $CHECK --pair && $CHECK --expect-paired
 
 # Dynamic pairing code: the server enters the code the tool writes to $ID.code.
-# --pair-dynamic-wrong-codes 1 enters a wrong code first; the tool answers
-# pair/abort pairing_code_mismatch, stays connected and pairs on the next
-# attempt, which --expect-mismatches=1 requires.
+# --pair-dynamic-wrong-codes 1 enters a wrong code in the first round; the tool
+# answers client/pair-retry, shows the same code and pairs in the second round
+# of the same attempt, which --expect-retries=1 requires.
 python ci/conformance/dev_server.py --host 127.0.0.1 --port 18931 \
     --trust-all-unpaired --no-console --debug \
     --pair-dynamic-code-file $ID.code --pair-dynamic-wrong-codes 1
-$CHECK --pair --expect-mismatches=1 && $CHECK --expect-paired
+$CHECK --pair --expect-retries=1 && $CHECK --expect-paired
+
+# The round limit: 20 wrong rounds. The tool retries 19 times and answers the
+# 20th with pair/abort pairing_code_mismatch. The server then starts another
+# attempt, which the tool holds back with client/pair-pending until
+# --auto-allow lifts it, as the Allow pairing tap would; that attempt pairs.
+python ci/conformance/dev_server.py --host 127.0.0.1 --port 18931 \
+    --trust-all-unpaired --no-console --debug \
+    --pair-dynamic-code-file $ID.code --pair-dynamic-wrong-codes 20
+$CHECK --pair --auto-allow --expect-retries=19 --expect-mismatches=1 && $CHECK --expect-paired
 ```
+
+The server logs one `entering ... pairing code` line per round, and
+`client held the attempt back (client/pair-pending)` before the held-back
+attempt. It must log no `non-compliant client` line.
 
 Use a fresh `--state-dir` and identity file per run. `--pair` does not drive
 `SendSpinProtocolHandler`, which is Android-only: the `pairing_index` count,

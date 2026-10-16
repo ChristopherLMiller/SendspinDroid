@@ -38,7 +38,7 @@ try:
         PairMethod,
     )
     from aiosendspin.noise.pairing_token import decode_psk_token
-    from aiosendspin.noise.trust_store import FileServerPairingStore
+    from aiosendspin.noise.trust_store import PAIRING_ROUND_LIMIT, FileServerPairingStore
     from aiosendspin.server.roles.controller.events import ControllerEvent
     from aiosendspin.server.server import SendspinServer
     from PIL import Image
@@ -127,6 +127,34 @@ async def _prompt_pairing_code() -> str:
     print("Enter the pairing code shown on the device: ", end="", flush=True)
     line = await loop.run_in_executor(None, sys.stdin.readline)
     return line.strip()
+
+
+# Entered by `pair-dynamic wrong=N`. Wrong unless the device happens to show it.
+WRONG_PAIRING_CODE = "000000"
+
+
+def _console_pairing_code(wrong: int):
+    """A `PairingCodeProvider` that enters `wrong` wrong codes, then prompts.
+
+    aiosendspin calls the provider once per round, so each wrong code is one
+    round, which the client answers with client/pair-retry.
+    """
+    left = wrong
+
+    async def provider() -> str:
+        nonlocal left
+        if left > 0:
+            left -= 1
+            LOGGER.info("entering the wrong pairing code %s (%d more to come)", WRONG_PAIRING_CODE, left)
+            return WRONG_PAIRING_CODE
+        return await _prompt_pairing_code()
+
+    return provider
+
+
+def log_pair_pending(message: str | None) -> None:
+    """Log a client/pair-pending: the client holds the attempt back, e.g. at its round limit."""
+    LOGGER.info("client held the attempt back (client/pair-pending): %r", message)
 
 
 def describe_client(client) -> str:
@@ -417,8 +445,12 @@ class DevServer:
 
         Stands in for the operator: the code is read from `code_file`, where
         NoiseHandshakeCheck --pair writes the one it is showing. The first
-        `wrong_codes` attempts enter a different code instead, which the client
-        answers with pair/abort pairing_code_mismatch.
+        `wrong_codes` rounds, counted across attempts, enter a different code
+        instead. The client answers each with client/pair-retry and shows the
+        same code again, up to its round limit, where it aborts with
+        pair/abort pairing_code_mismatch. Another attempt then follows, which
+        the client holds back with client/pair-pending until pairing is
+        allowed (NoiseHandshakeCheck --auto-allow).
         """
         assert self._server is not None
         while True:
@@ -434,21 +466,26 @@ class DevServer:
                 break
             await asyncio.sleep(0.5)
 
-        for attempt in range(wrong_codes + 1):
-            wrong = attempt < wrong_codes
+        wrong_left = wrong_codes
 
-            async def entered_code(wrong: bool = wrong) -> str:
-                while True:
-                    with contextlib.suppress(FileNotFoundError):
-                        code = code_file.read_text(encoding="utf-8").strip()
-                        if len(code) == 6:
-                            break
-                    await asyncio.sleep(0.1)
-                if wrong:
-                    code = f"{(int(code) + 1) % 1_000_000:06d}"
-                LOGGER.info("entering %s pairing code", "a wrong" if wrong else "the client's")
-                return code
+        # aiosendspin calls this once per round.
+        async def entered_code() -> str:
+            nonlocal wrong_left
+            while True:
+                with contextlib.suppress(FileNotFoundError):
+                    code = code_file.read_text(encoding="utf-8").strip()
+                    if len(code) == 6:
+                        break
+                await asyncio.sleep(0.1)
+            wrong = wrong_left > 0
+            if wrong:
+                wrong_left -= 1
+                code = f"{(int(code) + 1) % 1_000_000:06d}"
+            LOGGER.info("entering %s pairing code", "a wrong" if wrong else "the client's")
+            return code
 
+        # An attempt runs at most the client's round limit of rounds.
+        for _ in range(wrong_codes // PAIRING_ROUND_LIMIT + 2):
             # A code left over from an earlier attempt is not this attempt's.
             code_file.unlink(missing_ok=True)
             LOGGER.info("pairing %s by dynamic pairing code", client.client_id)
@@ -459,12 +496,15 @@ class DevServer:
                         PairMethod.DYNAMIC_PAIRING_CODE,
                         pairing_code_provider=entered_code,
                         pairing_format=PairingCodeFormat.DIGITS,
+                        on_pair_pending=log_pair_pending,
                     ),
                 )
             except Exception as err:
                 LOGGER.info("pairing attempt ended: %s: %s", type(err).__name__, err)
             else:
                 LOGGER.info("pairing attempt completed")
+                return
+        LOGGER.error("no dynamic pairing attempt completed")
 
     # -- console -----------------------------------------------------------
 
@@ -537,7 +577,8 @@ class DevServer:
             )
             print("pairing initiated")
         elif cmd in ("pair-dynamic", "pd"):
-            client_id = self._resolve(rest)
+            wrong = next((int(arg.removeprefix("wrong=")) for arg in rest if arg.startswith("wrong=")), 0)
+            client_id = self._resolve([arg for arg in rest if not arg.startswith("wrong=")])
             if server.get_client(client_id) is None:
                 raise ValueError(
                     f"no connected client with id {client_id}; the device must be "
@@ -548,8 +589,9 @@ class DevServer:
                 client_id,
                 PairingAttempt(
                     PairMethod.DYNAMIC_PAIRING_CODE,
-                    pairing_code_provider=_prompt_pairing_code,
+                    pairing_code_provider=_console_pairing_code(wrong),
                     pairing_format=PairingCodeFormat.DIGITS,
+                    on_pair_pending=log_pair_pending,
                 ),
             )
             print("pairing initiated")
@@ -574,7 +616,9 @@ class DevServer:
             "  trust [id]         allow an unpaired client to play (Sentinel PSK)\n"
             "  untrust [id]       revoke unpaired playback\n"
             "  pair <token>       pair using a SP:0... pairing token from the device\n"
-            "  pair-dynamic [id]  pair using the six-digit dynamic pairing code\n"
+            "  pair-dynamic [id] [wrong=N]\n"
+            "                     pair using the six-digit dynamic pairing code; with\n"
+            f"                     wrong=N the first N rounds enter {WRONG_PAIRING_CODE}\n"
             "  unpair [id]        drop the pairing record and tell the client\n"
             "  quit               stop the server\n"
             "id defaults to the only connected client when omitted.\n"
@@ -663,7 +707,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         metavar="N",
-        help="with --pair-dynamic-code-file: enter a wrong code for the first N attempts",
+        help="with --pair-dynamic-code-file: enter a wrong code in the first N rounds, "
+        "counted across attempts",
     )
     parser.add_argument(
         "--no-console",
