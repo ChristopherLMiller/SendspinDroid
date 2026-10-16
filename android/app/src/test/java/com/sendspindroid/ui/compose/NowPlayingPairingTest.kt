@@ -113,19 +113,31 @@ class NowPlayingPairingTest {
     @Test
     fun `Now Playing returns when the attempt ends`() {
         show()
-
-        // The service clears the gesture on the tap, then the code arrives,
-        // and the end of the attempt clears both.
-        update { updatePairingGestureRequested(true) }
-        update {
-            updatePairingGestureRequested(false)
-            updatePairingCode("123456")
-        }
+        update { updatePairingCode("123456") }
         assertCodeShown()
 
-        update { updatePairingCode(null) }
+        // Every end of the attempt clears the code and the gesture together.
+        update {
+            updatePairingCode(null)
+            updatePairingGestureRequested(false)
+        }
 
         assertNowPlaying()
+    }
+
+    @Test
+    fun `Now Playing shows between the Allow pairing tap and the code`() {
+        show()
+        update { updatePairingGestureRequested(true) }
+
+        // The service clears the gesture at the tap, but the code comes only
+        // with server/pair-init, the reply to the client/pair-init the tap
+        // sends. For that round trip neither is up.
+        update { updatePairingGestureRequested(false) }
+        assertNowPlaying()
+
+        update { updatePairingCode("123456") }
+        assertCodeShown()
     }
 
     @Test

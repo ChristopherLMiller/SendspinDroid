@@ -142,7 +142,9 @@ fun NowPlayingScreen(
     // output the client "suspends ... locally for the duration of the
     // attempt" (pairing.md, Entering and leaving pairing). The audio plays
     // on: only the display is advertised as an out-channel. Now Playing
-    // returns when the attempt's end clears both.
+    // returns whenever both are clear: at the attempt's end, and for the
+    // round trip from the Allow pairing tap, which clears the prompt, to the
+    // code.
     val pairingPrompt = pairingCode != null || pairingGestureRequested
     if (connectionState is AppConnectionState.Connected &&
         (admissionState != AdmissionState.READY || pairingPrompt)
