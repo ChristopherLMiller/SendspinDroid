@@ -408,8 +408,10 @@ class DevServer:
         inside the 20 seconds a server may send it early, so it goes out now: a
         client that follows roles/color/v1.md holds it as its pending update
         and applies it ten seconds after the "scheduled" line, not on receipt.
-        The clear is a color object with only a timestamp. Every color object
-        the client is sent is logged as JSON.
+        The clear is a color object with only a timestamp. Each color object
+        this sends is logged as JSON. The one the role sends when it is
+        activated, with only a timestamp, goes out before the role is listed
+        here, so it is not logged; only the client shows it.
         """
         assert self._server is not None
         while True:

@@ -165,8 +165,10 @@ print each image's SHA-256, which must match.
 
 `--send-test-colors` makes the server send a color palette to the first client
 with the color role, then, three seconds later, a second palette scheduled ten
-seconds ahead, and then clear the colors. Each color object the client is sent
-is logged as a `test colors: sent` line. The second goes out at once with a
+seconds ahead, and then clear the colors. Each color object the option sends is
+logged as a `test colors: sent` line. The one the server sends when it
+activates the role, with only a `timestamp`, goes out before logging starts,
+so only the client shows it. The second palette goes out at once with a
 future `timestamp`, so a client that follows roles/color/v1.md holds it as its
 pending update: the app logs `Color pending for` about 10000ms when it arrives,
 and should show it ten seconds after the server's `palette B scheduled` line,
