@@ -171,6 +171,10 @@ fun NowPlayingScreen(
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val formFactor = LocalFormFactor.current
 
+    // A line of its own, so only where there is the height for it
+    val albumArtist = albumArtistToShow(metadata)
+        ?.takeIf { showsAlbumArtist(formFactor, configuration.screenHeightDp) }
+
     Box(modifier = modifier.fillMaxSize()) {
         when {
             // Head unit: portrait layout with large touch targets
@@ -197,6 +201,7 @@ fun NowPlayingScreen(
             formFactor == FormFactor.TV -> {
                 NowPlayingTv(
                     metadata = metadata,
+                    albumArtist = albumArtist,
                     groupName = groupName,
                     artworkSource = artworkSource,
                     isBuffering = isBuffering,
@@ -218,6 +223,7 @@ fun NowPlayingScreen(
             isLandscape -> {
                 NowPlayingLandscape(
                     metadata = metadata,
+                    albumArtist = albumArtist,
                     groupName = groupName,
                     artworkSource = artworkSource,
                     isBuffering = isBuffering,
@@ -241,6 +247,7 @@ fun NowPlayingScreen(
             else -> {
                 NowPlayingPortrait(
                     metadata = metadata,
+                    albumArtist = albumArtist,
                     groupName = groupName,
                     artworkSource = artworkSource,
                     isBuffering = isBuffering,
@@ -292,6 +299,7 @@ fun NowPlayingScreen(
 @Composable
 private fun NowPlayingPortrait(
     metadata: TrackMetadata,
+    albumArtist: String? = null,
     groupName: String,
     artworkSource: ArtworkSource?,
     isBuffering: Boolean,
@@ -347,7 +355,7 @@ private fun NowPlayingPortrait(
         Spacer(modifier = Modifier.height(4.dp))
 
         // Artist / Album
-        val metadataText = buildMetadataString(metadata.artist, metadata.album)
+        val metadataText = buildMetadataString(metadata.artist, metadata.album, metadata.year)
         if (metadataText.isNotEmpty()) {
             Text(
                 text = metadataText,
@@ -359,6 +367,20 @@ private fun NowPlayingPortrait(
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics { liveRegion = LiveRegionMode.Polite }
+            )
+        }
+
+        // Album Artist
+        if (albumArtist != null) {
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.album_artist_label, albumArtist),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth()
             )
         }
 
@@ -431,6 +453,7 @@ private fun NowPlayingPortrait(
 @Composable
 private fun NowPlayingLandscape(
     metadata: TrackMetadata,
+    albumArtist: String? = null,
     groupName: String,
     artworkSource: ArtworkSource?,
     isBuffering: Boolean,
@@ -492,11 +515,25 @@ private fun NowPlayingLandscape(
             Spacer(modifier = Modifier.height(6.dp))
 
             // Artist / Album
-            val metadataText = buildMetadataString(metadata.artist, metadata.album)
+            val metadataText = buildMetadataString(metadata.artist, metadata.album, metadata.year)
             if (metadataText.isNotEmpty()) {
                 Text(
                     text = metadataText,
                     style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            // Album Artist
+            if (albumArtist != null) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = stringResource(R.string.album_artist_label, albumArtist),
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                     maxLines = 1,
@@ -575,6 +612,7 @@ private fun NowPlayingLandscape(
 @Composable
 private fun NowPlayingTv(
     metadata: TrackMetadata,
+    albumArtist: String? = null,
     groupName: String,
     artworkSource: ArtworkSource?,
     isBuffering: Boolean,
@@ -656,11 +694,25 @@ private fun NowPlayingTv(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 // Artist / Album
-                val metadataText = buildMetadataString(metadata.artist, metadata.album)
+                val metadataText = buildMetadataString(metadata.artist, metadata.album, metadata.year)
                 if (metadataText.isNotEmpty()) {
                     Text(
                         text = metadataText,
                         fontSize = AdaptiveDefaults.bodyTextSize(formFactor),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // Album Artist
+                if (albumArtist != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(R.string.album_artist_label, albumArtist),
+                        fontSize = AdaptiveDefaults.captionTextSize(formFactor),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                         maxLines = 1,
@@ -746,18 +798,48 @@ private fun NowPlayingTv(
 }
 
 /**
- * Builds the metadata string from artist and album.
- * Format: "Artist" or "Artist - Album" or "Album"
+ * Builds the metadata string from artist, album and year: the artist and the
+ * album with a bullet between them, and the year after the album as " (1975)",
+ * or as a segment of its own without an album. An empty part is left out, so
+ * without a year the line is just artist and album.
+ *
+ * The year is "`year?`: integer - release year in YYYY format"
+ * (roles/metadata/v1.md, Server -> Client: server/state metadata object).
+ * aiosendspin accepts 0, which is no year, so 0 or less is left out.
  */
-private fun buildMetadataString(artist: String, album: String): String {
+internal fun buildMetadataString(artist: String, album: String, year: Int?): String {
+    val shownYear = year?.takeIf { it > 0 }
     return buildString {
         if (artist.isNotEmpty()) append(artist)
         if (album.isNotEmpty()) {
             if (isNotEmpty()) append(" \u2022 ") // bullet separator
             append(album)
+            if (shownYear != null) append(" ($shownYear)")
+        } else if (shownYear != null) {
+            if (isNotEmpty()) append(" \u2022 ")
+            append(shownYear)
         }
     }
 }
+
+/**
+ * The album artist to show under the artist and album, or null. It is left
+ * out when it is the track artist, case and surrounding space ignored: the
+ * Media3 feed reports the track artist as the album artist when the server
+ * sends none.
+ */
+internal fun albumArtistToShow(metadata: TrackMetadata): String? =
+    metadata.albumArtist?.trim()
+        ?.takeIf { it.isNotEmpty() && !it.equals(metadata.artist.trim(), ignoreCase = true) }
+
+/**
+ * Whether Now Playing has the height for the album-artist line: on a TV, and
+ * on a tablet at least 600dp tall. [FormFactor] goes by width, so a phone on
+ * its side reads as a tablet, but is too short for another line.
+ */
+internal fun showsAlbumArtist(formFactor: FormFactor, screenHeightDp: Int): Boolean =
+    formFactor == FormFactor.TV ||
+        ((formFactor == FormFactor.TABLET_7 || formFactor == FormFactor.TABLET_10) && screenHeightDp >= 600)
 
 // ============================================================================
 // Previews
