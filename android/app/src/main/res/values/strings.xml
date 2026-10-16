@@ -4,6 +4,7 @@
     <string name="device_volume">Device Volume</string>
     <string name="track_position">Track position</string>
     <string name="group_label">Group: %s</string>
+    <string name="album_artist_label">Album artist: %s</string>
     <string name="connected">Connected</string>
     <string name="server_address">Server Address</string>
     <string name="album_art">Album artwork</string>

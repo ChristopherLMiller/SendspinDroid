@@ -2,8 +2,10 @@ package com.sendspindroid.playback
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Bundle
 import android.os.Looper
 import androidx.media3.common.MediaMetadata
+import androidx.media3.session.MediaSession
 import androidx.preference.PreferenceManager
 import com.sendspindroid.UnifiedServerRepository
 import com.sendspindroid.UserSettings
@@ -20,6 +22,7 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
@@ -35,7 +38,8 @@ import org.robolectric.annotation.Config
 /**
  * How the service carries the metadata role's album artist, year and track
  * from SendSpin's callback to PlaybackState and on to the session's
- * MediaMetadata. MetadataForwardingPlayer replaces those three on every
+ * MediaMetadata, and the album artist and year to the session extras that
+ * MainActivity reads. MetadataForwardingPlayer replaces those three on every
  * update, so each of the service's two calls into it must pass them: one
  * that leaves them out wipes them from the session.
  *
@@ -112,6 +116,13 @@ class PlaybackServiceMetadataTest {
             .apply { isAccessible = true }.get(service) as MetadataForwardingPlayer
 
     private fun sessionMetadata(): MediaMetadata = forwardingPlayer().mediaMetadata
+
+    /** What the service last published to its controllers, MainActivity among them. */
+    private fun sessionExtras(): Bundle {
+        val session = PlaybackService::class.java.getDeclaredField("mediaSession")
+            .apply { isAccessible = true }.get(service) as MediaSession
+        return session.sessionExtras
+    }
 
     /** The image fetched from the track's artwork URL reaches the session. */
     private fun urlArtworkArrives() {
@@ -223,6 +234,28 @@ class PlaybackServiceMetadataTest {
         assertNotNull(item)
         assertNull(item!!.mediaMetadata.title)
         assertNull(item.mediaMetadata.subtitle)
+    }
+
+    @Test
+    fun `the session extras carry the album artist and year`() {
+        metadataArrives(compilationTrack)
+
+        val extras = sessionExtras()
+        assertEquals("Various Artists", extras.getString(PlaybackService.EXTRA_ALBUM_ARTIST))
+        assertEquals(1999, extras.getInt(PlaybackService.EXTRA_YEAR))
+    }
+
+    @Test
+    fun `the session extras leave out the album artist and year of a track without them`() {
+        metadataArrives(compilationTrack)
+
+        metadataArrives(bareTrack)
+
+        // Absent, with no "" or 0 standing in for "none".
+        val extras = sessionExtras()
+        assertFalse(extras.containsKey(PlaybackService.EXTRA_ALBUM_ARTIST))
+        assertFalse(extras.containsKey(PlaybackService.EXTRA_YEAR))
+        assertEquals("Radio Edit", extras.getString(PlaybackService.EXTRA_TITLE))
     }
 
     @Test

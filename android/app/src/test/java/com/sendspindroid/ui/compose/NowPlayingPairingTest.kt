@@ -48,7 +48,7 @@ class NowPlayingPairingTest {
     private fun show(formFactor: FormFactor = FormFactor.PHONE) {
         viewModel.updateConnectionState(AppConnectionState.Connected("Kitchen", "192.168.1.4:8927"))
         viewModel.updatePlaybackState(true, PlaybackState.READY)
-        viewModel.updateMetadata("Highway Star", "Deep Purple", "Machine Head")
+        viewModel.updateMetadata("Highway Star", "Deep Purple", "Machine Head", null, null)
         viewModel.updateAdmissionState(AdmissionState.READY)
         composeTestRule.setContent {
             CompositionLocalProvider(LocalFormFactor provides formFactor) {

@@ -142,8 +142,13 @@ class MainActivityViewModel(application: Application) : AndroidViewModel(applica
         _playbackState.value = state
     }
 
-    fun updateMetadata(title: String, artist: String, album: String) {
-        _metadata.value = TrackMetadata(title, artist, album)
+    /**
+     * Two feeds race to call this: the session extras and the Media3
+     * MediaMetadata. No parameter has a default, so every caller passes
+     * [albumArtist] and [year], and one feed cannot wipe what the other set.
+     */
+    fun updateMetadata(title: String, artist: String, album: String, albumArtist: String?, year: Int?) {
+        _metadata.value = TrackMetadata(title, artist, album, albumArtist, year)
     }
 
     fun updateGroupName(name: String) {
