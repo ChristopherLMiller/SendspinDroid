@@ -86,7 +86,90 @@ class DynamicPairingCodeFlowTest {
         val actions = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
         val emit = actions.filterIsInstance<DynamicPairingAction.EmitPairingCode>().single()
         assertEquals(6, emit.code.length)
+        assertEquals(PairingCodeFormat.DIGITS, emit.format)
         assertEquals(1, store.value)
+    }
+
+    /**
+     * pairing.md, "QR-code emission": "the client presents the pairing code
+     * as a version-1 pairing token with the 24-byte code as its payload (39
+     * body characters)".
+     */
+    @Test
+    fun `a qr_code activation emits the code as a version-1 token`() {
+        val f = flow()
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.QR_CODE))
+        val emit = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
+            .filterIsInstance<DynamicPairingAction.EmitPairingCode>().single()
+        assertEquals(PairingCodeFormat.QR_CODE, emit.format)
+        assertEquals(43, emit.code.length)
+        assertTrue(emit.code.startsWith("SP:1"), emit.code)
+        assertEquals(PairingCode.QR_CODE_SIZE, qrCodeBytes(emit.code).size)
+    }
+
+    /**
+     * "In the qr_code format the pairing code is binary - the first 24 bytes
+     * of the digest - and the code bytes fed into CPace as PRS are these 24
+     * raw bytes" (pairing.md, "Pairing code derivation"), not the token that
+     * carries them to the server.
+     */
+    @Test
+    fun `a qr_code attempt pairs with the 24 raw code bytes as PRS`() {
+        val handshakeHash = ByteArray(32) { it.toByte() }
+        val f = DynamicPairingCodeFlow(handshakeHash, PairingFailureCounter(FakeStore()), NoiseCipherSuite.CHACHA_POLY)
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.QR_CODE))
+        val token = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { (it + 1).toByte() }))
+            .filterIsInstance<DynamicPairingAction.EmitPairingCode>().single().code
+
+        val sid = DynamicPairingCodeFlow.sidFor(handshakeHash, 1, round = 1)
+        val server = Initiator(qrCodeBytes(token), sid)
+        val yb = f.onEvent(DynamicPairingEvent.ServerPairAuth(server.ya))
+            .filterIsInstance<DynamicPairingAction.SendPairAuth>().single().yb
+        val confirmActions = f.onEvent(DynamicPairingEvent.ServerPairConfirm(server.tag(yb)))
+
+        val finalize = confirmActions.filterIsInstance<DynamicPairingAction.SendPairFinalize>().single()
+        val psk = aeadOpen(
+            NoiseCipherSuite.CHACHA_POLY.aead,
+            PairingWrap.wrapKey(PairingWrap.PSK_LABEL, sid, server.isk(yb)),
+            ByteArray(12), ByteArray(0), finalize.wrappedPsk,
+        )
+        val persisted = f.onEvent(DynamicPairingEvent.ServerPairFinalize)
+            .filterIsInstance<DynamicPairingAction.PersistRecord>().single()
+        assertContentEquals(psk, persisted.psk)
+    }
+
+    @Test
+    fun `a qr_code PRS of the token's ASCII fails, and the next round shows the same token`() {
+        val handshakeHash = ByteArray(32) { it.toByte() }
+        val store = FakeStore()
+        val f = DynamicPairingCodeFlow(handshakeHash, PairingFailureCounter(store), NoiseCipherSuite.CHACHA_POLY)
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.QR_CODE))
+        val token = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { (it + 1).toByte() }))
+            .filterIsInstance<DynamicPairingAction.EmitPairingCode>().single().code
+
+        // A server keying CPace with the token string it scanned, not the
+        // code inside it, cannot produce a server_kc this client verifies.
+        val ascii = Initiator(token.encodeToByteArray(), DynamicPairingCodeFlow.sidFor(handshakeHash, 1, round = 1))
+        val yb1 = f.onEvent(DynamicPairingEvent.ServerPairAuth(ascii.ya))
+            .filterIsInstance<DynamicPairingAction.SendPairAuth>().single().yb
+        assertEquals(
+            listOf<DynamicPairingAction>(DynamicPairingAction.SendPairRetry),
+            f.onEvent(DynamicPairingEvent.ServerPairConfirm(ascii.tag(yb1))),
+        )
+
+        // "a client that displays it keeps showing it": the same token, in
+        // the same format, for the next round.
+        assertEquals(
+            listOf<DynamicPairingAction>(DynamicPairingAction.EmitPairingCode(token, PairingCodeFormat.QR_CODE)),
+            f.onEvent(DynamicPairingEvent.ServerPairInit(null)),
+        )
+        val sid2 = DynamicPairingCodeFlow.sidFor(handshakeHash, 1, round = 2)
+        val raw = Initiator(qrCodeBytes(token), sid2, scalarSeed = 9)
+        val yb2 = f.onEvent(DynamicPairingEvent.ServerPairAuth(raw.ya))
+            .filterIsInstance<DynamicPairingAction.SendPairAuth>().single().yb
+        val confirmActions = f.onEvent(DynamicPairingEvent.ServerPairConfirm(raw.tag(yb2)))
+        assertEquals(1, confirmActions.filterIsInstance<DynamicPairingAction.SendPairConfirm>().size)
+        assertEquals(0, store.value, "a verified server_kc resets the count")
     }
 
     @Test
@@ -134,7 +217,10 @@ class DynamicPairingCodeFlowTest {
         // receipt it emits the code".
         val actions = f.onEvent(DynamicPairingEvent.ServerPairInit(null))
 
-        assertEquals(listOf<DynamicPairingAction>(DynamicPairingAction.EmitPairingCode(code)), actions)
+        assertEquals(
+            listOf<DynamicPairingAction>(DynamicPairingAction.EmitPairingCode(code, PairingCodeFormat.DIGITS)),
+            actions,
+        )
         assertEquals(2, store.value)
     }
 
@@ -367,7 +453,7 @@ class DynamicPairingCodeFlowTest {
 
         // Round 1: the operator types the code wrong.
         val wrongCode = ((code.toInt() + 1) % 1_000_000).toString().padStart(6, '0')
-        val round1 = Initiator(wrongCode, DynamicPairingCodeFlow.sidFor(handshakeHash, 1, round = 1))
+        val round1 = Initiator(wrongCode.encodeToByteArray(), DynamicPairingCodeFlow.sidFor(handshakeHash, 1, round = 1))
         val yb1 = f.onEvent(DynamicPairingEvent.ServerPairAuth(round1.ya))
             .filterIsInstance<DynamicPairingAction.SendPairAuth>().single().yb
         assertEquals(
@@ -377,11 +463,11 @@ class DynamicPairingCodeFlowTest {
 
         // Round 2: the same code, a separate CPace run under its own sid.
         assertEquals(
-            listOf<DynamicPairingAction>(DynamicPairingAction.EmitPairingCode(code)),
+            listOf<DynamicPairingAction>(DynamicPairingAction.EmitPairingCode(code, PairingCodeFormat.DIGITS)),
             f.onEvent(DynamicPairingEvent.ServerPairInit(null)),
         )
         val sid2 = DynamicPairingCodeFlow.sidFor(handshakeHash, 1, round = 2)
-        val round2 = Initiator(code, sid2, scalarSeed = 9)
+        val round2 = Initiator(code.encodeToByteArray(), sid2, scalarSeed = 9)
         val yb2 = f.onEvent(DynamicPairingEvent.ServerPairAuth(round2.ya))
             .filterIsInstance<DynamicPairingAction.SendPairAuth>().single().yb
         assertTrue(!yb1.contentEquals(yb2), "each round runs CPace with fresh scalars")
@@ -569,13 +655,14 @@ class DynamicPairingCodeFlowTest {
 
     /**
      * The server's (CPace initiator's) side of one round, played for real
-     * against [CPaceX25519], for the operator's [code] under [sid].
+     * against [CPaceX25519], keyed with [prs] - what the operator entered -
+     * under [sid].
      */
-    private class Initiator(code: String, private val sid: ByteArray, scalarSeed: Int = 7) {
+    private class Initiator(prs: ByteArray, private val sid: ByteArray, scalarSeed: Int = 7) {
         private val scalar = ByteArray(32) { (it + scalarSeed).toByte() }
         val ya: ByteArray = x25519ScalarMult(
             scalar,
-            CPaceX25519.calculateGenerator(code.encodeToByteArray(), ByteArray(0), sid),
+            CPaceX25519.calculateGenerator(prs, ByteArray(0), sid),
         )
 
         fun isk(yb: ByteArray): ByteArray {
@@ -594,6 +681,29 @@ class DynamicPairingCodeFlowTest {
 
     private fun ByteArray.hex(): String =
         joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+
+    /**
+     * The code a server reads out of a scanned version-1 token, by the
+     * spec's decoding rules (pairing.md, "Pairing Token"): drop `SP:1`, turn
+     * every `9` back into `2` and base32-decode.
+     */
+    private fun qrCodeBytes(token: String): ByteArray {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        val out = mutableListOf<Byte>()
+        var buffer = 0
+        var bits = 0
+        for (c in token.removePrefix("SP:1").replace('9', '2')) {
+            val value = alphabet.indexOf(c)
+            assertTrue(value >= 0, "not base32: $c")
+            buffer = (buffer shl 5) or value
+            bits += 5
+            if (bits >= 8) {
+                out.add((buffer shr (bits - 8)).toByte())
+                bits -= 8
+            }
+        }
+        return out.toByteArray()
+    }
 
     private companion object {
         /** A valid, non-low-order share; reuse the B.1.10 u6 vector. */
