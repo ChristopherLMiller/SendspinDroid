@@ -1577,10 +1577,13 @@ class PlaybackService : MediaLibraryService() {
     private fun updateMediaSessionArtwork(bitmap: Bitmap) {
         val state = _playbackState.value
 
+        // The state holds the metadata role's full state (messaging.md,
+        // server/state), so a null text field is one the track has none of.
+        // It goes on as "", which clears it; null would keep the last track's.
         forwardingPlayer?.updateMetadata(
-            title = state.title,
-            artist = state.artist,
-            album = state.album,
+            title = state.title.orEmpty(),
+            artist = state.artist.orEmpty(),
+            album = state.album.orEmpty(),
             artwork = bitmap,
             artworkUri = state.artworkUrl?.let { Uri.parse(it) },
             albumArtist = state.albumArtist,
@@ -1602,10 +1605,12 @@ class PlaybackService : MediaLibraryService() {
     private fun updateMediaMetadata(title: String, artist: String, album: String) {
         val state = _playbackState.value
 
+        // "" clears a text field the track has none of, as in
+        // updateMediaSessionArtwork.
         forwardingPlayer?.updateMetadata(
-            title = state.title,
-            artist = state.artist,
-            album = state.album,
+            title = state.title.orEmpty(),
+            artist = state.artist.orEmpty(),
+            album = state.album.orEmpty(),
             artwork = effectiveArtwork,
             artworkUri = state.artworkUrl?.let { Uri.parse(it) },
             albumArtist = state.albumArtist,
