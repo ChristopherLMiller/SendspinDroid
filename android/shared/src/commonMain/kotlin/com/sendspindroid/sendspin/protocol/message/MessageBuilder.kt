@@ -205,6 +205,18 @@ object MessageBuilder {
     }.toString()
 
     /**
+     * Build `client/pair-retry` for the Dynamic Pairing Code flow.
+     *
+     * `pairing.md#client--server-clientpair-retry`: "Sent in place of
+     * `client/pair-confirm` when `server_kc` fails to verify and the client
+     * admits another round", with "payload: `{}`".
+     */
+    fun buildClientPairRetry(): String = buildJsonObject {
+        put("type", SendSpinProtocol.MessageType.CLIENT_PAIR_RETRY)
+        put("payload", buildJsonObject { })
+    }.toString()
+
+    /**
      * Build `client/pair-finalize` for the Pairing PSK flow.
      *
      * `pairing.md#client--server-clientpair-finalize`: "In the Pairing PSK

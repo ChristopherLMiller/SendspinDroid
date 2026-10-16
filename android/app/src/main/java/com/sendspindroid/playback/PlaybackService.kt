@@ -19,6 +19,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -2777,7 +2778,7 @@ class PlaybackService : MediaLibraryService() {
         Log.d(TAG, "MediaLibrarySession initialized with browse tree support")
     }
 
-    private inner class LibraryCallback : MediaLibrarySession.Callback {
+    internal inner class LibraryCallback : MediaLibrarySession.Callback {
 
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
@@ -2959,7 +2960,7 @@ class PlaybackService : MediaLibraryService() {
                 .add(SessionCommand(COMMAND_PREVIOUS, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_SWITCH_GROUP, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_GET_STATS, Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_ALLOW_PAIRING, Bundle.EMPTY))
+                .apply { if (isOwnApp(controller)) add(SessionCommand(COMMAND_ALLOW_PAIRING, Bundle.EMPTY)) }
                 .add(SessionCommand(COMMAND_SET_SEARCH_FOR_SERVERS, Bundle.EMPTY))
                 .build()
 
@@ -2982,6 +2983,17 @@ class PlaybackService : MediaLibraryService() {
         ) {
             Log.i(TAG, "Controller disconnected: ${controller.packageName} (uid=${controller.uid})")
         }
+
+        /**
+         * Whether [controller] is this app's own UI, the only one allowed to
+         * send [COMMAND_ALLOW_PAIRING]. That command lifts the round limit's
+         * hold-back and resets the count, which `pairing.md#rounds` asks to
+         * be "a deliberate, manufacturer-defined operator action". This
+         * service is exported, so any other app could otherwise press it and
+         * guess pairing codes without limit.
+         */
+        private fun isOwnApp(controller: MediaSession.ControllerInfo): Boolean =
+            controller.uid == Process.myUid()
 
         override fun onCustomCommand(
             session: MediaSession,
@@ -3090,6 +3102,12 @@ class PlaybackService : MediaLibraryService() {
                 }
 
                 COMMAND_ALLOW_PAIRING -> {
+                    // Never offered to another app (onConnect), and refused
+                    // here too should one send it anyway.
+                    if (!isOwnApp(controller)) {
+                        Log.w(TAG, "Allow pairing refused from ${controller.packageName} (uid=${controller.uid})")
+                        return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                    }
                     Log.d(TAG, "Allow pairing gesture confirmed")
                     // Cleared here, at the operator's tap, rather than waiting on a
                     // round trip through the flow: the gate is a local UI concern,

@@ -716,7 +716,7 @@ class SendSpin(
         }
     }
 
-    /** Backs the Dynamic Pairing Code flow's brute-force counter (item 3.2's escalation gate). */
+    /** Backs the Dynamic Pairing Code flow's round count (`pairing.md#rounds`, the round limit). */
     private val dynamicPairingCounterStore = object : PairingCounterStore {
         override fun load(): Int = host.pairingCodeFailures()
         override fun save(value: Int) {
