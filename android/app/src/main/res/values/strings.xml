@@ -345,6 +345,9 @@
     <string name="admission_open_pairing">Open settings</string>
     <string name="pairing_code_title">Enter this code on the server</string>
     <string name="pairing_code_body">Type this code into %1$s to pair this player.</string>
+    <string name="pairing_qr_title">Scan this code on the server</string>
+    <string name="pairing_qr_body">Scan this code with %1$s to pair this player.</string>
+    <string name="pairing_code_qr_description">QR code to pair this player</string>
     <string name="pairing_allow_title">Allow pairing</string>
     <string name="pairing_allow_body">Too many recent pairing attempts. Tap Allow pairing on this device to continue.</string>
     <string name="pairing_allow_button">Allow pairing</string>

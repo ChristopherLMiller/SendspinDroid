@@ -65,6 +65,7 @@ import com.sendspindroid.model.SyncStats
 import com.sendspindroid.model.UnifiedServer
 import com.sendspindroid.sendspin.SendSpin
 import com.sendspindroid.sendspin.pairing.PairedServers
+import com.sendspindroid.sendspin.pairing.PairingCodeFormat
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import com.sendspindroid.sendspin.protocol.ColorState
 import com.sendspindroid.sendspin.protocol.TrackMetadata
@@ -534,6 +535,13 @@ class PlaybackService : MediaLibraryService() {
          * EXTRA_ADMISSION_STATE, for the same reason.
          */
         const val EXTRA_PAIRING_CODE = "pairing_code"
+
+        /**
+         * The emission format of EXTRA_PAIRING_CODE, as its wire name: in
+         * `qr_code` the code is a pairing token to draw as a QR code. Sent
+         * with the code and only with it.
+         */
+        const val EXTRA_PAIRING_CODE_FORMAT = "pairing_code_format"
 
         /**
          * Whether a dynamic pairing attempt is gesture-gated and waiting on
@@ -1161,6 +1169,10 @@ class PlaybackService : MediaLibraryService() {
     @Volatile
     private var pairingCode: String? = null
 
+    /** The emission format of [pairingCode]; meaningful only while that is set. */
+    @Volatile
+    private var pairingCodeFormat: PairingCodeFormat = PairingCodeFormat.DIGITS
+
     /** Whether a dynamic pairing attempt is waiting on the "Allow pairing" gesture. */
     @Volatile
     private var pairingGestureRequested: Boolean = false
@@ -1205,9 +1217,10 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
-        override fun onDynamicPairingCodeEmitted(code: String) {
+        override fun onDynamicPairingCodeEmitted(code: String, format: PairingCodeFormat) {
             mainHandler.post {
                 pairingCode = code
+                pairingCodeFormat = format
                 broadcastSessionExtras()
             }
         }
@@ -1678,7 +1691,10 @@ class PlaybackService : MediaLibraryService() {
                     putString(EXTRA_CONNECTION_STATE, STATE_CONNECTED)
                     serverName?.let { putString(EXTRA_SERVER_NAME, it) }
                     putString(EXTRA_ADMISSION_STATE, admissionState.name)
-                    pairingCode?.let { putString(EXTRA_PAIRING_CODE, it) }
+                    pairingCode?.let {
+                        putString(EXTRA_PAIRING_CODE, it)
+                        putString(EXTRA_PAIRING_CODE_FORMAT, pairingCodeFormat.wire)
+                    }
                     putBoolean(EXTRA_PAIRING_GESTURE_REQUESTED, pairingGestureRequested)
                 }
                 STATE_RECONNECTING -> {

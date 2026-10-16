@@ -53,6 +53,7 @@ import com.sendspindroid.coordinator.ReconnectStatus
 import com.sendspindroid.model.AppConnectionState
 import com.sendspindroid.playback.PlaybackService
 import com.sendspindroid.sendspin.pairing.PairedServers
+import com.sendspindroid.sendspin.pairing.PairingCodeFormat
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import com.sendspindroid.ui.settings.message
 import com.sendspindroid.model.UnifiedServer
@@ -1163,7 +1164,11 @@ class MainActivity : AppCompatActivity() {
         viewModel.updateAdmissionState(admission)
 
         // Both null/false when absent, matching "nothing to explain" above.
-        viewModel.updatePairingCode(extras.getString(PlaybackService.EXTRA_PAIRING_CODE))
+        viewModel.updatePairingCode(
+            extras.getString(PlaybackService.EXTRA_PAIRING_CODE),
+            PairingCodeFormat.fromWire(extras.getString(PlaybackService.EXTRA_PAIRING_CODE_FORMAT))
+                ?: PairingCodeFormat.DIGITS,
+        )
         viewModel.updatePairingGestureRequested(
             extras.getBoolean(PlaybackService.EXTRA_PAIRING_GESTURE_REQUESTED, false)
         )
