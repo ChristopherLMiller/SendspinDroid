@@ -560,6 +560,10 @@ class SendSpin(
         host.onPairingOutcome(PairingOutcome.Aborted(reason, sentByUs, serverLabel()))
     }
 
+    override fun onPairingAbandoned() {
+        host.onPairingOutcome(PairingOutcome.Abandoned(serverLabel()))
+    }
+
     /**
      * What to call the server when telling the user how a pairing ended.
      *

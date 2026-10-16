@@ -192,6 +192,7 @@
     <string name="pairing_client_id_summary">How servers identify this device. If a server says the token does not match the client, compare this with the ID it shows for this player.</string>
     <string name="pairing_last_outcome_title">Last pairing attempt</string>
     <string name="pairing_outcome_paired">Paired with %1$s.</string>
+    <string name="pairing_outcome_abandoned">%1$s stopped pairing before it finished. Start pairing again on the server.</string>
     <string name="pairing_outcome_unpaired">%1$s removed its pairing with this player. Pair again to use this player with that server.</string>
     <string name="pairing_outcome_attempt_timeout">Pairing with %1$s timed out: the server did not finish in time. Start pairing again on the server.</string>
     <string name="pairing_outcome_concurrent_attempt">%1$s was turned away because this player was already pairing or connected to another server. Try again once that has finished.</string>
