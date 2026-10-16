@@ -142,9 +142,12 @@ the count and shows a new code. aiosendspin waits six minutes for that tap
 before it gives the attempt up.
 
 `pair-dynamic wrong=N` enters `000000` in the first N rounds without
-prompting, so `pair-dynamic wrong=20` reaches the round limit at once. The
-count survives an app restart; only a code that verifies, or Allow pairing,
-resets it.
+prompting, so from a count of 0 `pair-dynamic wrong=20` reaches the round
+limit at once. A round counts when it begins, as the code is shown and
+before anything is entered, so the round the console is left prompting in
+has already counted: `pair-dynamic wrong=10` abandoned at its prompt has
+used 11 of the 20. The count survives an app restart; only a code that
+verifies, or Allow pairing, resets it.
 
 ## Verifying the wire end to end
 
@@ -319,9 +322,22 @@ during device acceptance and record the result of each:
   right code then pairs in the same attempt.
 - **The round limit: 20 wrong codes producing `pair/abort` with
   `pairing_code_mismatch`, the next attempt held back, and Allow pairing
-  resetting the count** -- confirm the app shows a clear failure state, then
-  the Allow pairing button, and that one wrong code after the tap is retried
-  rather than aborted (`pair-dynamic wrong=20`, then `pair-dynamic wrong=1`).
+  resetting the count** -- from a count of 0 (straight after a code that
+  verified, or after Allow pairing), confirm the app shows a clear failure
+  state, then the Allow pairing button, and that one wrong code after the tap
+  is retried rather than aborted (`pair-dynamic wrong=20`, then
+  `pair-dynamic wrong=1`).
+- **The count surviving an app restart** -- once the round limit has ended
+  an attempt, force-stop the app (`adb shell am force-stop
+  com.sendspindroid`), relaunch it and, once it has reconnected, run
+  `pair-dynamic`: confirm the attempt is still held back.
+- **Allow pairing refused to other apps** -- connect a media controller to
+  the service from another app (a small Media3 test app will do) and confirm
+  `com.sendspindroid.ALLOW_PAIRING` is not among its available session
+  commands, and that sending it anyway returns `ERROR_PERMISSION_DENIED`
+  with no `Allow pairing gesture confirmed` in logcat. Media3 refuses a
+  command it never granted before the service sees it. The app's own Allow
+  pairing button must keep working.
 - **MediaSession IPC delivery, TalkBack announcing the code, and on-screen
   legibility across a room** -- confirm the six digits reach the UI promptly
   over the MediaSession IPC boundary, that TalkBack reads the code aloud
