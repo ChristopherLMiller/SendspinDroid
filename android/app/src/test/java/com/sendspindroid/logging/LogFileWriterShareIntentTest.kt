@@ -1,5 +1,7 @@
 package com.sendspindroid.logging
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
@@ -10,7 +12,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowActivityManager
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
@@ -77,5 +81,22 @@ class LogFileWriterShareIntentTest {
         val idxNew = text.indexOf("MARKER_NEW")
         assertTrue("both markers should be present", idxOld >= 0 && idxNew >= 0)
         assertTrue("older content should appear before newer in combined file", idxOld < idxNew)
+    }
+
+    @Test
+    fun `shareIntent header lists the recent process exits`() {
+        val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
+        shadowOf(ctx.getSystemService(ActivityManager::class.java)).addApplicationExitInfo(
+            ShadowActivityManager.ApplicationExitInfoBuilder.newBuilder()
+                .setReason(ApplicationExitInfo.REASON_LOW_MEMORY)
+                .setImportance(ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED)
+                .setDescription("Watermark Pressure")
+                .build()
+        )
+        writer.appendLine("line-A")
+        writer.shareIntent(ctx)
+
+        val header = File(tempDir, "sendspin-log-combined.txt").readText().substringBefore("\n-----")
+        assertTrue(header, header.contains("LOW_MEMORY importance=400: Watermark Pressure"))
     }
 }
