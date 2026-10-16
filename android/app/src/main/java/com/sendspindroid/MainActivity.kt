@@ -667,8 +667,8 @@ class MainActivity : AppCompatActivity() {
                         // As Android 12 and later do for the launcher's activity: the
                         // app keeps its state and keeps playing.
                         onLeaveApp = { moveTaskToBack(true) },
-                        // Off, a connection made before the switch still
-                        // receives them until it ends
+                        // Album colors off: a connection made while it was on
+                        // still receives the palette until it ends, unshown
                         serverColors = serverColors.takeIf { serverColorsEnabled.value }
                     )
                 }

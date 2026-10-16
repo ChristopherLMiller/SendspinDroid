@@ -12,15 +12,16 @@ import com.sendspindroid.sendspin.protocol.ColorState
  * This scheme with the server's color@v1 palette in the roles Now Playing
  * reads, or null when the palette has no background for this mode.
  *
- * Only the pairs roles/color/v1.md guarantees are used. `background_dark`:
- * "The server MUST ensure a minimum WCAG contrast ratio of 4.5:1 with white
- * text and with `on_dark` (if also present)", and `on_dark` "4.5:1 with
- * `background_dark` (if also present) and with black text, so it can also
- * serve as an alternative light background"; light mode is the same with
- * `background_light`, `on_light`, black text and white. So text is white or
- * black, `on_X` colors the controls and secondary text, and the play
- * button's icon is black or white on it. `primary` and `accent` are "Not
- * adjusted for contrast" and are not used.
+ * Only the pairs roles/color/v1.md guarantees are used, in its `server/state`
+ * color object section. `background_dark`: "The server MUST ensure a minimum
+ * WCAG contrast ratio of 4.5:1 with white text and with `on_dark` (if also
+ * present)", and `on_dark` "4.5:1 with `background_dark` (if also present)
+ * and with black text, so it can also serve as an alternative light
+ * background"; light mode is the same with `background_light`, `on_light`,
+ * black text and white. So text is white or black, `on_X` colors the
+ * controls and secondary text, and the play button's icon is black or white
+ * on it. `primary` and `accent` are "Not adjusted for contrast" and are not
+ * used.
  *
  * The tonal buttons' container is the background moved away from `on_X`,
  * which only raises their contrast. Containers for menus and dialogs, error
