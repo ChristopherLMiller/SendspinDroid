@@ -39,7 +39,9 @@ class DynamicPairingCodeFlowTest {
 
     @Test
     fun `below the round limit an activation sends pair-init immediately`() {
-        val actions = flow(rounds = 19).onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        val actions = flow(rounds = 19).onEvent(
+            DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS),
+        )
         assertTrue(actions.any { it is DynamicPairingAction.SendPairInit })
         assertTrue(actions.none { it is DynamicPairingAction.SendPairPending })
         assertTrue(actions.none { it is DynamicPairingAction.RequestGesture })
@@ -49,7 +51,9 @@ class DynamicPairingCodeFlowTest {
     fun `at the round limit an activation is held back until the operator allows it`() {
         val store = FakeStore(20)
         val f = DynamicPairingCodeFlow(ByteArray(32), PairingFailureCounter(store), NoiseCipherSuite.CHACHA_POLY)
-        val actions = f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        val actions = f.onEvent(
+            DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS),
+        )
         // client/pair-pending "Does not start the attempt or its timeout."
         assertEquals(
             listOf(DynamicPairingAction.SendPairPending(1), DynamicPairingAction.RequestGesture),
@@ -73,7 +77,7 @@ class DynamicPairingCodeFlowTest {
         // reached a code at all. Pin that assumption here, at the flow level,
         // rather than leaving it implicit in the service wiring.
         val f = flow(rounds = 20)
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         val actions = f.onEvent(DynamicPairingEvent.ConnectionClosed)
         assertTrue(actions.any { it is DynamicPairingAction.StopEmittingCode })
     }
@@ -82,7 +86,7 @@ class DynamicPairingCodeFlowTest {
     fun `server pair-init emits the code and counts the round`() {
         val store = FakeStore()
         val f = DynamicPairingCodeFlow(ByteArray(32), PairingFailureCounter(store), NoiseCipherSuite.CHACHA_POLY)
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         val actions = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
         val emit = actions.filterIsInstance<DynamicPairingAction.EmitPairingCode>().single()
         assertEquals(6, emit.code.length)
@@ -176,7 +180,7 @@ class DynamicPairingCodeFlowTest {
     fun `a first round without nonce_A is a protocol error`() {
         // nonce_A: "Present in the first round only." - and so required there.
         val f = flow()
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         assertEquals(
             listOf<DynamicPairingAction>(DynamicPairingAction.ProtocolError),
             f.onEvent(DynamicPairingEvent.ServerPairInit(null)),
@@ -188,7 +192,7 @@ class DynamicPairingCodeFlowTest {
         store: FakeStore = FakeStore(),
     ): Triple<DynamicPairingCodeFlow, String, List<DynamicPairingAction>> {
         val f = DynamicPairingCodeFlow(ByteArray(32), PairingFailureCounter(store), NoiseCipherSuite.CHACHA_POLY)
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         val code = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
             .filterIsInstance<DynamicPairingAction.EmitPairingCode>().single().code
         f.onEvent(DynamicPairingEvent.ServerPairAuth(VALID_SHARE))
@@ -317,7 +321,9 @@ class DynamicPairingCodeFlowTest {
     fun `the next activation after an abort starts a fresh attempt`() {
         val (f, _, _) = mismatched()
         f.onEvent(DynamicPairingEvent.UserCancelled)
-        val actions = f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 2))
+        val actions = f.onEvent(
+            DynamicPairingEvent.PairingActivation(pairingIndex = 2, format = PairingCodeFormat.DIGITS),
+        )
         assertEquals(2, actions.filterIsInstance<DynamicPairingAction.SendPairInit>().single().pairingIndex)
         val emitted = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 6 }))
         assertTrue(emitted.single() is DynamicPairingAction.EmitPairingCode)
@@ -326,7 +332,7 @@ class DynamicPairingCodeFlowTest {
     @Test
     fun `a local cancel aborts with user_cancelled`() {
         val f = flow()
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
         assertEquals(
             listOf(
@@ -343,7 +349,7 @@ class DynamicPairingCodeFlowTest {
     fun `a cancel while gesture-gated aborts the unstarted attempt`() {
         // pair/abort "aborts a pairing attempt, started or not".
         val f = flow(rounds = 20)
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         val actions = f.onEvent(DynamicPairingEvent.UserCancelled)
         assertEquals("user_cancelled", actions.filterIsInstance<DynamicPairingAction.SendPairAbort>().single().reason)
     }
@@ -356,7 +362,7 @@ class DynamicPairingCodeFlowTest {
     @Test
     fun `a received abort ends the attempt without an answer`() {
         val f = flow()
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
         assertEquals(
             listOf<DynamicPairingAction>(DynamicPairingAction.StopEmittingCode),
@@ -368,7 +374,7 @@ class DynamicPairingCodeFlowTest {
     @Test
     fun `a low-order share is a protocol error, not an abort`() {
         val f = flow()
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
         val actions = f.onEvent(DynamicPairingEvent.ServerPairAuth(ByteArray(32)))
         assertTrue(actions.any { it is DynamicPairingAction.ProtocolError })
@@ -388,7 +394,7 @@ class DynamicPairingCodeFlowTest {
     @Test
     fun `the attempt timeout aborts`() {
         val f = flow()
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         val actions = f.onEvent(DynamicPairingEvent.AttemptTimeout)
         assertEquals(
             "attempt_timeout",
@@ -400,7 +406,7 @@ class DynamicPairingCodeFlowTest {
     @Test
     fun `a non-pairing activation discards state and stops emitting`() {
         val f = flow()
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
         val actions = f.onEvent(DynamicPairingEvent.NonPairingActivation)
         assertTrue(actions.any { it is DynamicPairingAction.StopEmittingCode })
@@ -410,7 +416,7 @@ class DynamicPairingCodeFlowTest {
     @Test
     fun `a connection drop persists nothing`() {
         val f = flow()
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         val actions = f.onEvent(DynamicPairingEvent.ConnectionClosed)
         assertTrue(actions.none { it is DynamicPairingAction.PersistRecord })
     }
@@ -446,7 +452,9 @@ class DynamicPairingCodeFlowTest {
         val handshakeHash = ByteArray(32) { it.toByte() }
         val store = FakeStore()
         val f = DynamicPairingCodeFlow(handshakeHash, PairingFailureCounter(store), NoiseCipherSuite.CHACHA_POLY)
-        val commitB = f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        val commitB = f.onEvent(
+            DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS),
+        )
             .filterIsInstance<DynamicPairingAction.SendPairInit>().single().commitB
         val code = f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { (it + 1).toByte() }))
             .filterIsInstance<DynamicPairingAction.EmitPairingCode>().single().code
@@ -496,13 +504,15 @@ class DynamicPairingCodeFlowTest {
     @Test
     fun `a re-activation mid-attempt discards the old attempt and starts a fresh one`() {
         val f = flow()
-        val first = f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        val first = f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
             .filterIsInstance<DynamicPairingAction.SendPairInit>().single()
         // Drive past ServerPairInit so a code has been emitted and a
         // CPaceResponder exists -- genuinely mid-attempt, not just pending.
         f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
 
-        val actions = f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 2))
+        val actions = f.onEvent(
+            DynamicPairingEvent.PairingActivation(pairingIndex = 2, format = PairingCodeFormat.DIGITS),
+        )
         assertTrue(
             actions.any { it is DynamicPairingAction.StopEmittingCode },
             "the abandoned attempt must stop emitting its code: $actions",
@@ -563,7 +573,7 @@ class DynamicPairingCodeFlowTest {
         }
 
         strayTap("idle", 5)
-        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS))
         strayTap("awaiting server/pair-init", 5)
         f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
         strayTap("awaiting server/pair-auth", 6)
@@ -603,7 +613,9 @@ class DynamicPairingCodeFlowTest {
         )
         val allActions = mutableListOf<DynamicPairingAction>()
 
-        allActions += f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        allActions += f.onEvent(
+            DynamicPairingEvent.PairingActivation(pairingIndex = 1, format = PairingCodeFormat.DIGITS),
+        )
 
         val nonceA = ByteArray(32) { (it + 1).toByte() }
         val initActions = f.onEvent(DynamicPairingEvent.ServerPairInit(nonceA))

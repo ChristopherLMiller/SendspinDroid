@@ -18,7 +18,7 @@ sealed interface DynamicPairingEvent {
      */
     data class PairingActivation(
         val pairingIndex: Int,
-        val format: PairingCodeFormat = PairingCodeFormat.DIGITS,
+        val format: PairingCodeFormat,
     ) : DynamicPairingEvent
 
     /** The local pairing window opened, ending a gesture-gated wait. */
