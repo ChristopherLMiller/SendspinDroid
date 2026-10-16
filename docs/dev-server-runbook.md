@@ -196,7 +196,9 @@ keep no year or track number from step 2; on its media session the album
 artist then falls back to the track artist. The steps run before the
 `--play-test-audio` stream when both are given. `NoiseHandshakeCheck` does not
 check metadata, but with `--hold-seconds=70` it prints each `server/state` as
-it arrives.
+it arrives, cut at 140 characters: for steps 1 and 2 that is before `year` and
+`track`. The server's `test metadata:` lines show what each step sends, and
+`dumpsys` on a device shows what the app made of it.
 
 ### Pairing without an operator
 
