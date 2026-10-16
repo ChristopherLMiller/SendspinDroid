@@ -3442,12 +3442,14 @@ class PlaybackService : MediaLibraryService() {
         val serverId = intent.getStringExtra(EXTRA_SERVER_ID)
         if (serverId == null) {
             Log.w(TAG, "Auto-connect: missing server ID")
+            takeForegroundAndLetGo()
             return
         }
 
         val server = UnifiedServerRepository.getServer(serverId)
         if (server == null) {
             Log.w(TAG, "Auto-connect: server $serverId not found")
+            takeForegroundAndLetGo()
             return
         }
 
@@ -3483,15 +3485,19 @@ class PlaybackService : MediaLibraryService() {
     private fun connectOnStart(server: UnifiedServer) {
         if (isConnectedOrReconnecting()) {
             Log.i(TAG, "Not connecting to ${server.name}: already connected or connecting")
+            // A start by startForegroundService still has to take the
+            // foreground, which a connection being made has not taken yet.
+            // If that connection fails, releaseIfIdle lets it go.
+            startForegroundServiceWithNotification(
+                connectedServerName(),
+                reconnecting = coordinator.reconnectStatus.value is ReconnectStatus.Attempting,
+            )
             return
         }
         if (server.local == null) {
-            // The loop would wait forever with nothing to dial. A start by
-            // startForegroundService still has to take the foreground; it is
-            // let go at once.
+            // The loop would wait forever with nothing to dial.
             Log.w(TAG, "Auto-connect: server ${server.name} has no configured connection methods")
-            startForegroundServiceWithNotification()
-            releaseIfIdle()
+            takeForegroundAndLetGo()
             return
         }
         // The server this service is connected to, which a later drop
@@ -3500,6 +3506,15 @@ class PlaybackService : MediaLibraryService() {
         acquireConnectWakeLock()
         // Takes the foreground at once, as a start by startForegroundService must.
         startReconnectLoop(server)
+    }
+
+    /**
+     * A start by startForegroundService has to take the foreground even when
+     * there is nothing to connect to; it is let go at once.
+     */
+    private fun takeForegroundAndLetGo() {
+        startForegroundServiceWithNotification()
+        releaseIfIdle()
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

@@ -1,5 +1,6 @@
 package com.sendspindroid.playback
 
+import android.app.Notification
 import android.content.Context
 import android.content.Intent
 import android.os.Looper
@@ -139,9 +140,45 @@ class PlaybackServiceStartConnectTest {
     fun `boot auto-connect runs the reconnect loop`() {
         searchForServers(true)
 
-        startForBoot()
+        val service = startForBoot()
 
         assertEquals(defaultServer.id, attempting()?.serverId)
+        // Started by startForegroundService, which startForeground must answer.
+        val notification = shadowOf(service).lastForegroundNotification
+        assertNotNull("the service takes the foreground", notification)
+        val text = notification!!.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+        assertTrue(text, text.contains(defaultServer.name))
+    }
+
+    @Test
+    fun `an auto-connect while a connection is being made still takes the foreground`() {
+        // The boot notification is tapped while the app's own connect is
+        // under way: nothing has taken the foreground yet.
+        searchForServers(true)
+        val created = Robolectric.buildService(PlaybackService::class.java, autoConnectIntent()).create()
+        controller = created
+        val service = created.get()
+        service.setCurrentServer(defaultServer.id)
+        service.connectToServer(defaultServer.local!!.address)
+        idle()
+        assertEquals(TransportState.Connecting, clientState.value)
+
+        created.startCommand(0, 1)
+        idle()
+
+        assertNotNull("the service takes the foreground", shadowOf(service).lastForegroundNotification)
+    }
+
+    @Test
+    fun `an auto-connect for a server that is gone takes the foreground and lets it go`() {
+        // Deleted between boot and the tap on the notification.
+        searchForServers(true)
+        every { UnifiedServerRepository.getServer(defaultServer.id) } returns null
+
+        val service = startForBoot()
+
+        assertEquals(NotificationHelper.NOTIFICATION_ID, shadowOf(service).lastForegroundNotificationId)
+        assertTrue(shadowOf(service).isStoppedBySelf)
     }
 
     @Test
