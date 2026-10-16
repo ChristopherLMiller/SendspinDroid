@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Looper
+import androidx.media3.session.MediaSession
 import androidx.preference.PreferenceManager
 import com.google.common.collect.ImmutableList
 import com.sendspindroid.UnifiedServerRepository
@@ -131,10 +132,19 @@ class PlaybackServiceTvVolumeTest {
         idle()
     }
 
-    /** The volume [index] stands for on its own, on this device's curve. */
-    private fun deviceVolume(index: Int): Int = VolumeLaw.volumeFor(index) {
-        audioManager.getStreamVolumeDb(AudioManager.STREAM_MUSIC, it, AudioDeviceInfo.TYPE_HDMI).toDouble()
+    /** The volume the service last sent the activity, in its session extras. */
+    private fun publishedVolume(service: PlaybackService): Int {
+        val session = PlaybackService::class.java.getDeclaredField("mediaSession")
+            .apply { isAccessible = true }.get(service) as MediaSession
+        return session.sessionExtras.getInt(PlaybackService.EXTRA_VOLUME)
     }
+
+    /** This device's gain in dB at STREAM_MUSIC [index] on HDMI. */
+    private fun hdmiDb(index: Int): Double =
+        audioManager.getStreamVolumeDb(AudioManager.STREAM_MUSIC, index, AudioDeviceInfo.TYPE_HDMI).toDouble()
+
+    /** The volume [index] stands for on its own, on this device's curve. */
+    private fun deviceVolume(index: Int): Int = VolumeLaw.volumeFor(index, ::hdmiDb)
 
     private fun connect(service: PlaybackService) {
         service.setCurrentServer(server.id)
@@ -153,6 +163,22 @@ class PlaybackServiceTvVolumeTest {
         assertEquals(VolumeLaw.amplitude(30), trackGain(service), 0f)
         connect(service)
         verify { anyConstructed<SendSpin>().setInitialVolume(30, false) }
+    }
+
+    @Test
+    fun `a volume near the top on a full-volume output comes back after a restart`() {
+        fullVolumeHdmi()
+        start().setVolume(0.3f)
+        // Volume 90 asks for the max index, which the output reads back as
+        // asked: only the type found full-volume before, in the run before,
+        // tells that it plays as track gain
+        assertEquals(maxIndex, VolumeLaw.indexFor(90, maxIndex, ::hdmiDb))
+        start().setVolume(0.9f)
+
+        val service = start()
+
+        assertEquals(90, service.playbackState.value.volume)
+        assertEquals(VolumeLaw.amplitude(90), trackGain(service), 0f)
     }
 
     @Test
@@ -191,6 +217,8 @@ class PlaybackServiceTvVolumeTest {
         assertEquals(30, service.playbackState.value.volume)
         assertEquals(VolumeLaw.amplitude(30), trackGain(service), 0f)
         verify { anyConstructed<SendSpin>().setVolume(0.3) }
+        // The slider too, which showed the headphones' volume
+        assertEquals(30, publishedVolume(service))
     }
 
     @Test
