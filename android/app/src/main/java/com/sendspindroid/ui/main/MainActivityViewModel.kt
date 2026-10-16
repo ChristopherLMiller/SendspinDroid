@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import com.sendspindroid.model.AppConnectionState
+import com.sendspindroid.sendspin.pairing.PairingCodeFormat
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,12 +62,16 @@ class MainActivityViewModel(application: Application) : AndroidViewModel(applica
         _admissionState.value = state
     }
 
-    /** The dynamic pairing code to show the operator, or null when none is active. */
-    private val _pairingCode = MutableStateFlow<String?>(null)
-    val pairingCode: StateFlow<String?> = _pairingCode.asStateFlow()
+    /**
+     * The dynamic pairing code to show the operator, or null when none is
+     * active. One value with its format, so a screen never draws a code in
+     * another code's format.
+     */
+    private val _pairingCode = MutableStateFlow<ShownPairingCode?>(null)
+    val pairingCode: StateFlow<ShownPairingCode?> = _pairingCode.asStateFlow()
 
-    fun updatePairingCode(code: String?) {
-        _pairingCode.value = code
+    fun updatePairingCode(code: String?, format: PairingCodeFormat = PairingCodeFormat.DIGITS) {
+        _pairingCode.value = code?.let { ShownPairingCode(it, format) }
     }
 
     /** Whether a dynamic pairing attempt is waiting on the "Allow pairing" gesture. */
@@ -250,3 +255,6 @@ enum class PlaybackState {
     READY,
     ENDED
 }
+
+/** A dynamic pairing code being shown, in its emission [format]. */
+data class ShownPairingCode(val code: String, val format: PairingCodeFormat)

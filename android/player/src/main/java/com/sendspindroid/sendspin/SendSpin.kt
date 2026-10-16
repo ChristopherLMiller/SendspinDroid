@@ -47,6 +47,7 @@ import java.util.concurrent.Executors
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import com.sendspindroid.sendspin.protocol.message.MessageBuilder
 import com.sendspindroid.sendspin.pairing.PairMethod
+import com.sendspindroid.sendspin.pairing.PairingCodeFormat
 import com.sendspindroid.sendspin.pairing.PairingCounterStore
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -212,8 +213,11 @@ class SendSpin(
         /** The server added or removed the player role; a removal has stopped the output. */
         fun onPlayerRoleChanged(active: Boolean) {}
 
-        /** Show this dynamic pairing code to the operator. */
-        fun onDynamicPairingCodeEmitted(code: String) {}
+        /**
+         * Show this dynamic pairing code to the operator: six digits, or in
+         * [PairingCodeFormat.QR_CODE] a pairing token to draw as a QR code.
+         */
+        fun onDynamicPairingCodeEmitted(code: String, format: PairingCodeFormat) {}
 
         /** Stop showing a dynamic pairing code (the attempt ended, one way or another). */
         fun onDynamicPairingCodeCleared() {}
@@ -589,8 +593,8 @@ class SendSpin(
         callback.onAdmissionStateChanged(state)
     }
 
-    override fun onDynamicPairingCodeEmitted(code: String) {
-        callback.onDynamicPairingCodeEmitted(code)
+    override fun onDynamicPairingCodeEmitted(code: String, format: PairingCodeFormat) {
+        callback.onDynamicPairingCodeEmitted(code, format)
     }
 
     override fun onDynamicPairingCodeCleared() {

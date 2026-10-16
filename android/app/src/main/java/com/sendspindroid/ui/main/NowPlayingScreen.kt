@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.sendspindroid.R
 import com.sendspindroid.ui.main.components.AdmissionNotice
 import com.sendspindroid.sendspin.pairing.PairedServers
+import com.sendspindroid.sendspin.pairing.PairingCodeFormat
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import com.sendspindroid.ui.settings.unfinishedMessage
 import com.sendspindroid.model.AppConnectionState
@@ -153,7 +154,8 @@ fun NowPlayingScreen(
             // READY gets here only with a prompt, which is PAIRING's to show
             state = if (admissionState == AdmissionState.READY) AdmissionState.PAIRING else admissionState,
             serverName = serverName,
-            pairingCode = pairingCode,
+            pairingCode = pairingCode?.code,
+            pairingCodeFormat = pairingCode?.format ?: PairingCodeFormat.DIGITS,
             gestureRequested = pairingGestureRequested,
             onOpenPairingClick = onOpenPairingClick,
             onAllowPairingClick = onAllowPairingClick,
