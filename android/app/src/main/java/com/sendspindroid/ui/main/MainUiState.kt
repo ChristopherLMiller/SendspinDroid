@@ -9,6 +9,9 @@ import android.graphics.Bitmap
  * optional in roles/metadata/v1.md (Server -> Client: server/state metadata
  * object), "`album_artist?`: string - album artist(s)" and "`year?`: integer -
  * release year in YYYY format", and no "" or 0 stands in for an absent one.
+ * The exception is the album artist from the Media3 feed, which is the track
+ * artist when the server sends none, so the two feeds can disagree on it.
+ * Now Playing does not show an album artist equal to the artist.
  */
 data class TrackMetadata(
     val title: String,
