@@ -226,7 +226,8 @@ class PlaybackServiceStartConnectTest {
 
     @Test
     fun `a second boot broadcast leaves the connection being made alone`() {
-        // BOOT_COMPLETED and QUICKBOOT_POWERON can both arrive.
+        // The Android 15+ tap-to-connect notification tapped while the loop
+        // is already running.
         searchForServers(true)
         startForBoot()
         firstAttempt()
@@ -268,6 +269,19 @@ class PlaybackServiceStartConnectTest {
         restartBySystem()
 
         assertEquals(kitchen.id, attempting()?.serverId)
+    }
+
+    @Test
+    fun `a restart does not swap a server it cannot look up for the default`() {
+        // Connected to a server found on mDNS and never saved: after the
+        // restart it is not in the repository.
+        searchForServers(true)
+        UserSettings.dialledServerId = "discovered-1"
+        every { UnifiedServerRepository.getServer("discovered-1") } returns null
+
+        restartBySystem()
+
+        assertEquals(ReconnectStatus.Idle, PlaybackService.reconnectStatus.value)
     }
 
     @Test

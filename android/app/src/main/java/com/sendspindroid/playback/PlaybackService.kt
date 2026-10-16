@@ -3469,13 +3469,19 @@ class PlaybackService : MediaLibraryService() {
      * reconnects to it. While searching nothing would: connect to the server
      * it was on, which [setCurrentServer] recorded. The service is left
      * started only while it is connected or trying to be, so that is the
-     * server it was killed on. One that is not saved (found on mDNS) cannot
-     * be looked up again; then the default server, as at boot.
+     * server it was killed on. With no server recorded yet (the first restart
+     * after an update), the default server, as at boot. One recorded but not
+     * saved (found on mDNS) cannot be looked up again, and is not swapped for
+     * another server.
      */
     private fun handleRestart() {
         if (connectionMode.isAdvertising) return
-        val server = UserSettings.dialledServerId?.let { UnifiedServerRepository.getServer(it) }
-            ?: UnifiedServerRepository.getDefaultServer()
+        val dialled = UserSettings.dialledServerId
+        val server = if (dialled != null) {
+            UnifiedServerRepository.getServer(dialled)
+        } else {
+            UnifiedServerRepository.getDefaultServer()
+        }
         if (server == null) {
             Log.i(TAG, "Restarted with no server to connect to")
             return
