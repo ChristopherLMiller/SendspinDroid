@@ -1,0 +1,167 @@
+package com.sendspindroid.ui.compose
+
+import android.app.Application
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ApplicationProvider
+import com.sendspindroid.model.AppConnectionState
+import com.sendspindroid.sendspin.protocol.AdmissionState
+import com.sendspindroid.ui.adaptive.FormFactor
+import com.sendspindroid.ui.adaptive.LocalFormFactor
+import com.sendspindroid.ui.main.MainActivityViewModel
+import com.sendspindroid.ui.main.NowPlayingScreen
+import com.sendspindroid.ui.main.PlaybackState
+import com.sendspindroid.ui.theme.SendSpinTheme
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * A pairing code, and the Allow pairing prompt, are shown while pairing runs
+ * alongside playback (#220). "A server/activate that adds 'pairing' to
+ * activities does not by itself affect active_roles" (pairing.md, Entering
+ * and leaving pairing), so an approved player keeps its roles, and its
+ * admission state stays READY, through the whole attempt.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class NowPlayingPairingTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    private val viewModel = MainActivityViewModel(ApplicationProvider.getApplicationContext<Application>())
+
+    private var allowPairingClicks = 0
+
+    /** Connected and playing, with roles live: the server admitted the player. */
+    private fun show(formFactor: FormFactor = FormFactor.PHONE) {
+        viewModel.updateConnectionState(AppConnectionState.Connected("Kitchen", "192.168.1.4:8927"))
+        viewModel.updatePlaybackState(true, PlaybackState.READY)
+        viewModel.updateMetadata("Highway Star", "Deep Purple", "Machine Head")
+        viewModel.updateAdmissionState(AdmissionState.READY)
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalFormFactor provides formFactor) {
+                SendSpinTheme {
+                    NowPlayingScreen(
+                        viewModel = viewModel,
+                        onPreviousClick = {},
+                        onPlayPauseClick = {},
+                        onNextClick = {},
+                        onSwitchGroupClick = {},
+                        onVolumeChange = {},
+                        onSeek = {},
+                        onOpenPairingClick = {},
+                        onAllowPairingClick = { allowPairingClicks++ },
+                    )
+                }
+            }
+        }
+        composeTestRule.waitForIdle()
+    }
+
+    private fun update(change: MainActivityViewModel.() -> Unit) {
+        composeTestRule.runOnUiThread { viewModel.change() }
+        composeTestRule.waitForIdle()
+    }
+
+    private fun button(label: String) = composeTestRule.onNode(hasText(label) and hasClickAction())
+
+    private fun assertNowPlaying() {
+        composeTestRule.onNodeWithText("Highway Star").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Enter this code on the server").assertDoesNotExist()
+        button("Allow pairing").assertDoesNotExist()
+    }
+
+    private fun assertCodeShown() {
+        composeTestRule.onNodeWithText("Enter this code on the server").assertIsDisplayed()
+        composeTestRule.onNodeWithText("123-456").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Highway Star").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a code emitted alongside playback is shown in place of Now Playing`() {
+        show()
+        assertNowPlaying()
+
+        update { updatePairingCode("123456") }
+
+        assertCodeShown()
+    }
+
+    @Test
+    fun `Allow pairing alongside playback is shown in place of Now Playing, and works`() {
+        show()
+
+        update { updatePairingGestureRequested(true) }
+
+        composeTestRule.onNodeWithText("Highway Star").assertDoesNotExist()
+        button("Allow pairing").assertIsDisplayed().performClick()
+        assertEquals(1, allowPairingClicks)
+    }
+
+    @Test
+    fun `Now Playing returns when the attempt ends`() {
+        show()
+
+        // The service clears the gesture on the tap, then the code arrives,
+        // and the end of the attempt clears both.
+        update { updatePairingGestureRequested(true) }
+        update {
+            updatePairingGestureRequested(false)
+            updatePairingCode("123456")
+        }
+        assertCodeShown()
+
+        update { updatePairingCode(null) }
+
+        assertNowPlaying()
+    }
+
+    @Test
+    fun `on a head unit the code is shown in place of Now Playing, which returns after`() {
+        show(FormFactor.HEADUNIT)
+        assertNowPlaying()
+
+        update { updatePairingCode("123456") }
+        assertCodeShown()
+
+        update { updatePairingCode(null) }
+        assertNowPlaying()
+    }
+
+    @Test
+    @Config(qualifiers = "w960dp-h540dp-land")
+    fun `on a TV Allow pairing takes focus from the controls, and gives it back`() {
+        show(FormFactor.TV)
+        composeTestRule.onNodeWithContentDescription("Pause button").assertIsFocused()
+
+        update { updatePairingGestureRequested(true) }
+        button("Allow pairing").assertIsFocused()
+
+        update { updatePairingGestureRequested(false) }
+        composeTestRule.onNodeWithContentDescription("Pause button").assertIsFocused()
+    }
+
+    @Test
+    @Config(qualifiers = "w960dp-h540dp-land")
+    fun `on a TV the controls take focus back after a code`() {
+        show(FormFactor.TV)
+
+        update { updatePairingCode("123456") }
+        assertCodeShown()
+
+        update { updatePairingCode(null) }
+        composeTestRule.onNodeWithContentDescription("Pause button").assertIsFocused()
+    }
+}
