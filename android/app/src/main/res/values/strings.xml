@@ -184,6 +184,7 @@
     <string name="pairing_token_summary">Paste this into your server to pair this device. Copy it whole, without spaces or dashes.</string>
     <string name="pairing_token_qr_hint">Scan to copy the token to another device</string>
     <string name="pairing_token_qr_hint_tv">Scan with your phone to get the token, then paste it into your server</string>
+    <string name="pairing_token_qr_description">QR code of this device\'s pairing token</string>
     <string name="pairing_token_copy">Copy pairing token</string>
     <string name="pairing_token_copied">Pairing token copied</string>
     <string name="pairing_token_secret_warning">Treat this like a password: anyone who has it can pair with this device.</string>
@@ -192,6 +193,7 @@
     <string name="pairing_client_id_summary">How servers identify this device. If a server says the token does not match the client, compare this with the ID it shows for this player.</string>
     <string name="pairing_last_outcome_title">Last pairing attempt</string>
     <string name="pairing_outcome_paired">Paired with %1$s.</string>
+    <string name="pairing_outcome_abandoned">%1$s stopped pairing before it finished. Start pairing again on the server.</string>
     <string name="pairing_outcome_unpaired">%1$s removed its pairing with this player. Pair again to use this player with that server.</string>
     <string name="pairing_outcome_attempt_timeout">Pairing with %1$s timed out: the server did not finish in time. Start pairing again on the server.</string>
     <string name="pairing_outcome_concurrent_attempt">%1$s was turned away because this player was already pairing or connected to another server. Try again once that has finished.</string>
@@ -208,7 +210,7 @@
     <string name="paired_server_forget_title">Forget %1$s?</string>
     <string name="paired_server_forget_message">This removes the pairing on this device only. The server will still list this player and will not connect until you pair again. If this server is connected now, the connection ends.</string>
     <string name="pref_dynamic_pairing_code_title">Dynamic pairing code</string>
-    <string name="pref_dynamic_pairing_code_summary">Most servers do not support this pairing method yet. Turning it on may prevent connecting to older servers.</string>
+    <string name="pref_dynamic_pairing_code_summary">Also lets a server pair using a 6-digit code shown on this device, which you type into the server. The pairing token keeps working. Experimental.</string>
     <string name="debug_share_chooser_title">Share Debug Log</string>
     <string name="debug_log_exported">Debug log exported</string>
     <string name="debug_log_export_failed">Failed to export debug log</string>

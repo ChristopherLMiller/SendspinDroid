@@ -1306,8 +1306,20 @@ abstract class SendSpinProtocolHandler(
                     }
 
                     else -> {
+                        // "A server MAY send such a cancelling server/activate
+                        // at any point during a pairing attempt. On receipt the
+                        // client abandons the attempt". A server cancelling on
+                        // operator action "SHOULD first send pair/abort", which
+                        // has already ended the attempt and said why; without
+                        // one, this activation is the only sign it is over. A
+                        // gesture-gated wait is cancelled the same way:
+                        // "Servers SHOULD apply their own timeout while waiting
+                        // for client/pair-init, cancelling as above".
+                        val abandoned = pairingAttemptInProgress ||
+                            dynamicPairingFlow?.awaitingGesture == true
                         runPairingActions(PairingEvent.NonPairingActivation)
                         runDynamicPairingActions(DynamicPairingEvent.NonPairingActivation)
+                        if (abandoned) onPairingAbandoned()
                     }
                 }
             }
@@ -1484,6 +1496,12 @@ abstract class SendSpinProtocolHandler(
      * @param sentByUs false when the server sent it.
      */
     protected open fun onPairingAborted(reason: String, sentByUs: Boolean) {}
+
+    /**
+     * The server ended a pairing attempt with a `server/activate` and no
+     * `pair/abort`. Surfaced for the pairing UI (#225), as for an abort.
+     */
+    protected open fun onPairingAbandoned() {}
 
     // ========== server/unpair (item 2.7) ==========
 
