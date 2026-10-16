@@ -1,6 +1,7 @@
 package com.sendspindroid.sendspin.protocol
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -445,5 +446,23 @@ class ServerStateTest {
         assertEquals(TrackMetadata(), handler.metadataUpdates.last())
         assertEquals(ControllerState(), handler.controllerStateUpdates.last())
         assertNull(handler.colorStateUpdates.last())
+    }
+
+    // ========== claiming the color role ==========
+
+    private fun helloFrom(handler: TestProtocolHandler): String {
+        handler.handleTextMessageForTest(serverHello)
+        return handler.sentMessages.single { it.contains("client/hello") }
+    }
+
+    @Test
+    fun `client hello claims the color role, in low memory mode too`() {
+        assertTrue(helloFrom(TestProtocolHandler()).contains("\"color@v1\""))
+        assertTrue(helloFrom(TestProtocolHandler().apply { lowMemoryMode = true }).contains("\"color@v1\""))
+    }
+
+    @Test
+    fun `a handler that does not claim the color role leaves it out of client hello`() {
+        assertFalse(helloFrom(TestProtocolHandler().apply { colorRole = false }).contains("color@v1"))
     }
 }

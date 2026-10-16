@@ -313,6 +313,7 @@ abstract class SendSpinProtocolHandler(
             softwareVersion = getSoftwareVersion(),
             unpairedAccessEnabled = isUnpairedAccessEnabled(),
             supportedPairMethods = getSupportedPairMethods(),
+            colorRole = claimsColorRole(),
         )
         sendProtocolMessage(text)
         // Logged whole, not truncated. The pairing fields sit at the end of the
@@ -450,6 +451,9 @@ abstract class SendSpinProtocolHandler(
      * before anyone has paired anything.
      */
     protected open fun isUnpairedAccessEnabled(): Boolean = true
+
+    /** Whether client/hello lists `color@v1`. */
+    protected open fun claimsColorRole(): Boolean = true
 
     /**
      * The pairing methods this client currently offers.

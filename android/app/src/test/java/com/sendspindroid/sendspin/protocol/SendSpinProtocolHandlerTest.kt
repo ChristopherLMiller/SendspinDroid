@@ -732,6 +732,7 @@ class TestProtocolHandler(
 
     var matchedCategory: PskCategory = PskCategory.SENTINEL
     var unpairedAccess = true
+    var colorRole = true
     var formats: List<MessageBuilder.FormatEntry> = emptyList()
 
     /** What reached the wire and when the connection was closed, in order. */
@@ -747,6 +748,8 @@ class TestProtocolHandler(
     override fun matchedPskCategory(): PskCategory = matchedCategory
 
     override fun isUnpairedAccessEnabled(): Boolean = unpairedAccess
+
+    override fun claimsColorRole(): Boolean = colorRole
 
     override fun currentServerId(): String = "srv1"
 
