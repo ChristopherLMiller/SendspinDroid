@@ -81,7 +81,6 @@ import com.sendspindroid.network.NetworkState
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.DefaultMediaNotificationProvider
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -336,6 +335,11 @@ class PlaybackService : MediaLibraryService() {
     private var highPowerWakeLock: PowerManager.WakeLock? = null
     private var highPowerWifiLock: WifiManager.WifiLock? = null
 
+    // Keeps the CPU awake while the loop makes a connection at boot or after
+    // a restart, when nothing else does. Not reference counted, and acquired
+    // with a timeout: it cannot be left held.
+    private var connectWakeLock: PowerManager.WakeLock? = null
+
     // Handler for periodic wake lock refresh
     private val wakeLockHandler = Handler(Looper.getMainLooper())
 
@@ -458,18 +462,15 @@ class PlaybackService : MediaLibraryService() {
         private const val CONNECT_TIMEOUT_MS = 15_000L
 
         // How long the playback locks (CPU, Wi-Fi, audio focus) held when a
-        // connection dropped are kept for the reconnect loop. Long enough for
-        // a server restart or a network blip with the screen off; after it the
-        // loop carries on whenever the device is awake.
+        // connection dropped are kept for the reconnect loop, and the wake
+        // lock of a connection made at boot or on a restart is held. Long
+        // enough for a server restart or a network blip with the screen off;
+        // after it the loop carries on whenever the device is awake.
         private const val RECONNECT_LOCK_HOLD_MS = 10 * 60 * 1000L
 
         // How long COMMAND_EXIT waits for the goodbye to go out before it
         // stops the service anyway.
         private const val EXIT_FLUSH_TIMEOUT_MS = 2_000L
-
-        // How long boot auto-connect waits for mDNS to re-resolve a saved local
-        // server's current address before falling back to the stored one (#158).
-        private const val MDNS_AUTOCONNECT_TIMEOUT_MS = 5_000L
 
         // Custom session commands
         const val COMMAND_CONNECT = "com.sendspindroid.CONNECT"
@@ -715,6 +716,7 @@ class PlaybackService : MediaLibraryService() {
                     // The loop is over, one way or the other.
                     stopReconnectDiscovery()
                     mainHandler.removeCallbacks(reconnectLockRelease)
+                    releaseConnectWakeLock()
                     releaseIfIdle()
                     noteDialEnded()
                 }
@@ -1709,9 +1711,9 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
-     * Connects to a SendSpin server because someone chose it: the user, Android
-     * Auto, boot auto-connect. Takes over from a reconnect loop still trying
-     * for the previous server.
+     * Connects to a SendSpin server because someone chose it: the user or
+     * Android Auto. Takes over from a reconnect loop still trying for the
+     * previous server.
      *
      * @param address Server address in "host:port" format
      * @param path WebSocket path (default: /sendspin)
@@ -1796,10 +1798,10 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
-     * An established connection has ended. This is the one place a reconnect
-     * starts: the coordinator's loop, for the server the service was connected
-     * to, unless the client chose to leave (user disconnect, server switch,
-     * server/unpair, rejected activation). No activity needs to be alive.
+     * An established connection has ended. The coordinator's loop takes it
+     * back, for the server the service was connected to, unless the client
+     * chose to leave (user disconnect, server switch, server/unpair, rejected
+     * activation). No activity needs to be alive.
      *
      * Runs before the connection-state collector sees the connection gone, so
      * that it finds the loop already running and leaves the service in the
@@ -1813,6 +1815,16 @@ class PlaybackService : MediaLibraryService() {
             return
         }
         Log.i(TAG, "Connection to ${server.name} lost - reconnecting")
+        startReconnectLoop(server)
+    }
+
+    /**
+     * Start the coordinator's loop for [server], which keeps trying until it
+     * connects or is cancelled. Every connection the service makes on its own
+     * starts here, so none is tried only once: after a drop, at boot, and
+     * when the system restarts the service.
+     */
+    private fun startReconnectLoop(server: UnifiedServer) {
         startForegroundServiceWithNotification(server.name, reconnecting = true)
         mainHandler.removeCallbacks(reconnectLockRelease)
         mainHandler.postDelayed(reconnectLockRelease, RECONNECT_LOCK_HOLD_MS)
@@ -2681,6 +2693,31 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
+     * Keeps the CPU awake while the loop makes a connection at boot or after
+     * a restart. Released when the loop ends, or by its timeout of
+     * [RECONNECT_LOCK_HOLD_MS] if that comes first. No audio focus is asked
+     * for: nothing plays yet, and the user's other audio carries on.
+     */
+    private fun acquireConnectWakeLock() {
+        if (connectWakeLock == null) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            connectWakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "SendSpinDroid::Connect"
+            ).apply { setReferenceCounted(false) }
+        }
+        connectWakeLock?.acquire(RECONNECT_LOCK_HOLD_MS)
+        Log.d(TAG, "Connect wake lock acquired with ${RECONNECT_LOCK_HOLD_MS / 60000}min timeout")
+    }
+
+    private fun releaseConnectWakeLock() {
+        if (connectWakeLock?.isHeld == true) {
+            connectWakeLock?.release()
+            Log.d(TAG, "Connect wake lock released")
+        }
+    }
+
+    /**
      * Called when High Power Mode is toggled in settings.
      * Acquires or releases locks based on the new state and current connection.
      */
@@ -3388,17 +3425,18 @@ class PlaybackService : MediaLibraryService() {
         Log.d(TAG, "onStartCommand: action=${intent?.action}, flags=$flags")
         super.onStartCommand(intent, flags, startId)
 
-        if (intent?.action == ACTION_AUTO_CONNECT) {
-            handleAutoConnect(intent)
+        when {
+            intent?.action == ACTION_AUTO_CONNECT -> handleAutoConnect(intent)
+            // START_STICKY: the system restarted the service it had killed.
+            intent == null -> handleRestart()
         }
 
         return START_STICKY
     }
 
     /**
-     * Handle auto-connect from BootReceiver.
-     * Looks up the default server and connects using its preferred connection method.
-     * Shows a foreground notification immediately to satisfy Android's requirements.
+     * Handle auto-connect from BootReceiver: connect to the server it names,
+     * the default server.
      */
     private fun handleAutoConnect(intent: Intent) {
         val serverId = intent.getStringExtra(EXTRA_SERVER_ID)
@@ -3414,87 +3452,54 @@ class PlaybackService : MediaLibraryService() {
         }
 
         Log.i(TAG, "Auto-connect on boot: ${server.name} (${server.id})")
+        connectOnStart(server)
+    }
 
+    /**
+     * The service was killed and the system has started it again. While
+     * advertising, onCreate has put the listener back and the server
+     * reconnects to it. While searching nothing would: connect to the default
+     * server, as at boot. Nothing records the server last connected to, so
+     * that is the one to return to.
+     */
+    private fun handleRestart() {
+        if (connectionMode.isAdvertising) return
+        val server = UnifiedServerRepository.getDefaultServer()
+        if (server == null) {
+            Log.i(TAG, "Restarted with no default server to connect to")
+            return
+        }
+        Log.i(TAG, "Restarted: connecting to ${server.name} (${server.id})")
+        connectOnStart(server)
+    }
+
+    /**
+     * Connect to [server] when the service starts on its own, at boot or
+     * after a restart, with nobody there to try again: through the reconnect
+     * loop, so that a server or a network not up yet is retried (#158), and
+     * with the CPU kept awake while the loop runs. A connection already up or
+     * being made is left alone.
+     */
+    private fun connectOnStart(server: UnifiedServer) {
+        if (isConnectedOrReconnecting()) {
+            Log.i(TAG, "Not connecting to ${server.name}: already connected or connecting")
+            return
+        }
+        if (server.local == null) {
+            // The loop would wait forever with nothing to dial. A start by
+            // startForegroundService still has to take the foreground; it is
+            // let go at once.
+            Log.w(TAG, "Auto-connect: server ${server.name} has no configured connection methods")
+            startForegroundServiceWithNotification()
+            releaseIfIdle()
+            return
+        }
         // The server this service is connected to, which a later drop
         // reconnects to.
         setCurrentServer(server.id)
-
-        // Show foreground notification immediately (Android requires this within 10s)
-        startForegroundServiceWithNotification(server.name)
-
-        // Connect using the server's local address (the only connection method left).
-        when {
-            server.local != null -> {
-                // Re-resolve via mDNS first: a stored static IP can go stale
-                // (DHCP) and cause a refused connect on boot. See #158.
-                autoConnectLocalWithMdns(server)
-            }
-            else -> {
-                Log.w(TAG, "Auto-connect: server ${server.name} has no configured connection methods")
-            }
-        }
-    }
-
-    /**
-     * Auto-connect to a saved local server, re-resolving its current address via
-     * mDNS first so a stale stored address (DHCP change) doesn't cause a failed
-     * connect on boot. Falls back to the stored address if mDNS doesn't find the
-     * server within [MDNS_AUTOCONNECT_TIMEOUT_MS] (server offline, or the network
-     * not yet up on boot). See #158.
-     */
-    private fun autoConnectLocalWithMdns(server: UnifiedServer) {
-        val local = server.local ?: return
-        serviceScope.launch {
-            val resolved = resolveLocalAddressViaMdns(server.name, MDNS_AUTOCONNECT_TIMEOUT_MS)
-            val address = resolved ?: local.address
-            when {
-                resolved == null ->
-                    // warn: on boot this correlates with a likely-failing connect
-                    // when the stored address has gone stale (the #158 scenario).
-                    Log.w(TAG, "Auto-connect: mDNS did not find '${server.name}'; using stored ${local.address}")
-                resolved != local.address ->
-                    Log.i(TAG, "Auto-connect: mDNS resolved '${server.name}' to $resolved (stored ${local.address})")
-                else ->
-                    Log.i(TAG, "Auto-connect: mDNS confirmed '${server.name}' at $resolved")
-            }
-            connectToServer(address, local.path)
-        }
-    }
-
-    /**
-     * Run a short, bounded mDNS discovery and return the current address of the
-     * discovered server whose friendly name (or, as a fallback, raw mDNS service
-     * name) equals [serverName], or null on timeout. Every result is fed to
-     * [UnifiedServerRepository.addDiscoveredServer], which also refreshes the
-     * matching saved server's stored address (by friendly name).
-     */
-    private suspend fun resolveLocalAddressViaMdns(serverName: String, timeoutMs: Long): String? {
-        val result = CompletableDeferred<String?>()
-        val manager = NsdDiscoveryManager(this, object : NsdDiscoveryManager.DiscoveryListener {
-            override fun onServerDiscovered(name: String, address: String, path: String, friendlyName: String) {
-                UnifiedServerRepository.addDiscoveredServer(friendlyName, address, path)
-                if (!result.isCompleted && (friendlyName == serverName || name == serverName)) {
-                    result.complete(address)
-                }
-            }
-            override fun onServerLost(name: String) {}
-            override fun onDiscoveryStarted() {}
-            override fun onDiscoveryStopped() {}
-            override fun onDiscoveryError(error: String) {
-                // Complete so we fall back to the stored address immediately
-                // instead of stalling for the full timeout.
-                Log.w(TAG, "Auto-connect: mDNS discovery error for '$serverName': $error")
-                if (!result.isCompleted) result.complete(null)
-            }
-        })
-        return try {
-            manager.startDiscovery()
-            withTimeoutOrNull(timeoutMs) { result.await() }
-        } finally {
-            // cleanup() (not stopDiscovery()) so the multicast lock is released
-            // even if onDiscoveryStarted never fired.
-            manager.cleanup()
-        }
+        acquireConnectWakeLock()
+        // Takes the foreground at once, as a start by startForegroundService must.
+        startReconnectLoop(server)
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -3589,6 +3594,7 @@ class PlaybackService : MediaLibraryService() {
 
         // Cancel playback locks and foreground notification.
         releasePlaybackLocks()
+        releaseConnectWakeLock()
         stopForegroundNotification()
 
         mediaSession?.run {
