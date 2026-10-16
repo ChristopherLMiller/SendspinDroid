@@ -10,9 +10,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.pow
 
 /**
  * The color scheme Now Playing takes from a server's color@v1 palette.
@@ -142,7 +139,7 @@ class ServerColorSchemeTest {
     }
 
     /**
-     * Music Assistant's palettes for three sets of cover-art candidates, and
+     * Music Assistant's palettes for four sets of cover-art candidates, and
      * palettes at the spec's 4.5:1 floor: the lightest and darkest
      * backgrounds, and saturated ones.
      */
@@ -150,6 +147,9 @@ class ServerColorSchemeTest {
         palette,
         ColorState(1, rgb(30, 68, 120), rgb(148, 172, 208), onDark = rgb(220, 220, 225), onLight = rgb(20, 30, 40)),
         ColorState(1, rgb(88, 80, 21), rgb(252, 238, 118), onDark = rgb(240, 240, 240), onLight = rgb(120, 40, 140)),
+        // A dark cover: no candidate reaches Music Assistant's preferred 7:1,
+        // so on_dark is at the 4.5:1 floor on black
+        ColorState(1, rgb(0, 0, 0), rgb(184, 186, 190), onDark = rgb(114, 116, 126), onLight = rgb(35, 40, 60)),
         ColorState(1, rgb(0x76, 0x76, 0x76), rgb(255, 255, 255), onDark = rgb(255, 255, 255), onLight = rgb(0x76, 0x76, 0x76)),
         ColorState(1, rgb(0, 0, 0), rgb(0x76, 0x76, 0x76), onDark = rgb(0x76, 0x76, 0x76), onLight = rgb(0, 0, 0)),
         ColorState(1, rgb(0, 0, 255), rgb(255, 255, 0), onDark = rgb(0xBC, 0xBC, 0xBC), onLight = rgb(0x71, 0x71, 0x71)),
@@ -176,22 +176,6 @@ class ServerColorSchemeTest {
     }
 
     private fun rgb(r: Int, g: Int, b: Int): Int = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-
-    /** WCAG 2 contrast ratio. */
-    private fun contrast(a: Color, b: Color): Double {
-        val la = luminance(a)
-        val lb = luminance(b)
-        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
-    }
-
-    /** WCAG 2 relative luminance of an opaque sRGB color. */
-    private fun luminance(c: Color): Double {
-        fun channel(v: Float): Double {
-            val s = v.toDouble()
-            return if (s <= 0.03928) s / 12.92 else ((s + 0.055) / 1.055).pow(2.4)
-        }
-        return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
-    }
 
     private fun requireScheme(scheme: ColorScheme?): ColorScheme {
         assertNotNull("expected server colors", scheme)

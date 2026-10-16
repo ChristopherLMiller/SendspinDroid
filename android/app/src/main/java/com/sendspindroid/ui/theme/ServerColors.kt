@@ -5,6 +5,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 import com.sendspindroid.sendspin.protocol.ColorState
 
@@ -70,23 +72,37 @@ private fun mix(color: Color, toward: Color, fraction: Float) = Color(
 @Composable
 fun ServerColorTheme(colors: ColorState?, content: @Composable () -> Unit) {
     val base = MaterialTheme.colorScheme
-    val target = colors?.let { base.withServerColors(it, LocalIsDarkTheme.current) } ?: base
-    MaterialTheme(
-        colorScheme = base.copy(
-            background = blend(target.background),
-            surface = blend(target.surface),
-            onBackground = blend(target.onBackground),
-            onSurface = blend(target.onSurface),
-            primary = blend(target.primary),
-            onPrimary = blend(target.onPrimary),
-            onSurfaceVariant = blend(target.onSurfaceVariant),
-            secondaryContainer = blend(target.secondaryContainer),
-            onSecondaryContainer = blend(target.onSecondaryContainer),
-            surfaceVariant = blend(target.surfaceVariant),
-        ),
-        content = content,
-    )
+    val server = colors?.let { base.withServerColors(it, LocalIsDarkTheme.current) }
+    val target = server ?: base
+    CompositionLocalProvider(LocalServerColors provides (server != null)) {
+        MaterialTheme(
+            colorScheme = base.copy(
+                background = blend(target.background),
+                surface = blend(target.surface),
+                onBackground = blend(target.onBackground),
+                onSurface = blend(target.onSurface),
+                primary = blend(target.primary),
+                onPrimary = blend(target.onPrimary),
+                onSurfaceVariant = blend(target.onSurfaceVariant),
+                secondaryContainer = blend(target.secondaryContainer),
+                onSecondaryContainer = blend(target.onSecondaryContainer),
+                surfaceVariant = blend(target.surfaceVariant),
+            ),
+            content = content,
+        )
+    }
 }
+
+/**
+ * Whether [ServerColorTheme] shows a server's palette here.
+ *
+ * The contrast roles/color/v1.md guarantees, in its `server/state` color
+ * object section, is for the colors as sent: `on_dark` "4.5:1 with
+ * `background_dark`", and `on_light` the same with `background_light`. Drawn
+ * with alpha over the background they lose it, so what the Material colors
+ * dim with alpha is drawn opaque here.
+ */
+val LocalServerColors = compositionLocalOf { false }
 
 /** One of the roles [withServerColors] sets, on its way to [color]. */
 @Composable
