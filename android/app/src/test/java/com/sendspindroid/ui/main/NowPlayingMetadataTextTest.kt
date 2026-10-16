@@ -14,7 +14,7 @@ import org.junit.Test
 class NowPlayingMetadataTextTest {
 
     @Test
-    fun `artist, album and year read 'Queen - A Night at the Opera (1975)'`() {
+    fun `artist, album and year read as the artist, a bullet, then the album and (1975)`() {
         assertEquals(
             "Queen \u2022 A Night at the Opera (1975)",
             buildMetadataString("Queen", "A Night at the Opera", 1975)
