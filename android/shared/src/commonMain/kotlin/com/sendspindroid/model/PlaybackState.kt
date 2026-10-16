@@ -10,6 +10,9 @@ data class PlaybackState(
     val artist: String? = null,
     val album: String? = null,
     val artworkUrl: String? = null,
+    val albumArtist: String? = null,
+    val year: Int? = null,
+    val track: Int? = null,
     val durationMs: Long = 0,
     val positionMs: Long = 0,
     val positionUpdatedAt: Long = 0,
@@ -49,6 +52,10 @@ data class PlaybackState(
      * Duration and position are taken as given: 0 means unknown, so a caller
      * that wants to keep the current duration passes it. The position is
      * stamped as received now.
+     *
+     * [albumArtist], [year] and [track] are taken as given too: null means the
+     * track has none. messaging.md, server/state: "Every message MUST carry
+     * the full state of each role object it includes."
      */
     fun withMetadata(
         title: String?,
@@ -57,7 +64,10 @@ data class PlaybackState(
         artworkUrl: String?,
         durationMs: Long,
         positionMs: Long,
-        playbackSpeed: Int = this.playbackSpeed
+        playbackSpeed: Int = this.playbackSpeed,
+        albumArtist: String? = null,
+        year: Int? = null,
+        track: Int? = null
     ): PlaybackState = copy(
         title = when {
             title == null -> this.title
@@ -79,6 +89,9 @@ data class PlaybackState(
             artworkUrl.isEmpty() -> null
             else -> artworkUrl
         },
+        albumArtist = albumArtist?.ifEmpty { null },
+        year = year,
+        track = track,
         durationMs = durationMs,
         positionMs = positionMs,
         // Stamped for every position, zero included. Keeping the old stamp for
@@ -92,6 +105,9 @@ data class PlaybackState(
         artist = null,
         album = null,
         artworkUrl = null,
+        albumArtist = null,
+        year = null,
+        track = null,
         durationMs = 0,
         positionMs = 0,
         positionUpdatedAt = 0,

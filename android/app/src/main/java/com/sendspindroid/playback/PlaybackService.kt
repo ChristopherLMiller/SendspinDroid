@@ -19,6 +19,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.Process
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -65,6 +66,8 @@ import com.sendspindroid.model.UnifiedServer
 import com.sendspindroid.sendspin.SendSpin
 import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.protocol.AdmissionState
+import com.sendspindroid.sendspin.protocol.ColorState
+import com.sendspindroid.sendspin.protocol.TrackMetadata
 import com.sendspindroid.sendspin.SendSpinEndpoint
 import com.sendspindroid.discovery.DiscoveryGate
 import com.sendspindroid.discovery.NsdAdvertiser
@@ -438,6 +441,11 @@ class PlaybackService : MediaLibraryService() {
         private val _artistArtwork = MutableStateFlow<ByteArray?>(null)
         val artistArtwork: StateFlow<ByteArray?> = _artistArtwork.asStateFlow()
 
+        // The colors the server sends for the current audio (color@v1).
+        // In-process, like the artist image: only the activity reads them.
+        private val _serverColors = MutableStateFlow<ColorState?>(null)
+        val serverColors: StateFlow<ColorState?> = _serverColors.asStateFlow()
+
         private const val TAG = "PlaybackService"
 
         // How long after an output is connected or removed its volume is read
@@ -793,7 +801,7 @@ class PlaybackService : MediaLibraryService() {
 
     private var clientObserver: Job? = null
 
-    /** Follow [client]'s connection and controller state. One client at a time. */
+    /** Follow [client]'s connection, controller state and colors. One client at a time. */
     private fun observeClient(client: SendSpin) {
         clientObserver?.cancel()
         clientObserver = serviceScope.launch {
@@ -803,6 +811,7 @@ class PlaybackService : MediaLibraryService() {
                     sendSpinPlayer?.updateControllerState(state)
                 }
             }
+            launch { client.colorState.collect { _serverColors.value = it } }
             client.connectionState.collect { state -> onClientState(state) }
         }
     }
@@ -886,6 +895,7 @@ class PlaybackService : MediaLibraryService() {
                 // Clear playback state on disconnect
                 _playbackState.value = _playbackState.value.withConnectionEnded()
                 _artistArtwork.value = null
+                _serverColors.value = null
                 lastArtworkUrl = null
                 lastTrackTitle = null
                 urlArtwork = null
@@ -1327,17 +1337,19 @@ class PlaybackService : MediaLibraryService() {
         }
 
         @OptIn(UnstableApi::class)
-        override fun onMetadataUpdate(
-            title: String,
-            artist: String,
-            album: String,
-            artworkUrl: String,
-            durationMs: Long,
-            positionMs: Long,
-            playbackSpeed: Int
-        ) {
+        override fun onMetadataUpdate(metadata: TrackMetadata, positionMs: Long) {
+            // Null means the server has no value for the field. The text
+            // fields carry that on as "".
+            val title = metadata.title.orEmpty()
+            val artist = metadata.artist.orEmpty()
+            val album = metadata.album.orEmpty()
+            val artworkUrl = metadata.artworkUrl.orEmpty()
+            val durationMs = metadata.durationMs
+            // No progress object means no position, so nothing to advance.
+            val playbackSpeed = metadata.progress?.playbackSpeed ?: 0
             mainHandler.post {
-                Log.d(TAG, "Metadata update: $title / $artist / $album")
+                Log.d(TAG, "Metadata update: $title / $artist / $album, album artist " +
+                    "${metadata.albumArtist}, year ${metadata.year}, track ${metadata.track}")
 
                 // server/state carries the role's full state, so "" here
                 // means the track has no such field. It is passed on as "",
@@ -1349,7 +1361,10 @@ class PlaybackService : MediaLibraryService() {
                     artworkUrl = artworkUrl,
                     durationMs = durationMs,
                     positionMs = positionMs,
-                    playbackSpeed = playbackSpeed
+                    playbackSpeed = playbackSpeed,
+                    albumArtist = metadata.albumArtist,
+                    year = metadata.year,
+                    track = metadata.track
                 )
 
                 // Update the player's media item for lock screen/notification
@@ -1567,7 +1582,10 @@ class PlaybackService : MediaLibraryService() {
             artist = state.artist,
             album = state.album,
             artwork = bitmap,
-            artworkUri = state.artworkUrl?.let { Uri.parse(it) }
+            artworkUri = state.artworkUrl?.let { Uri.parse(it) },
+            albumArtist = state.albumArtist,
+            year = state.year,
+            trackNumber = state.track
         )
 
         broadcastMetadataToControllers(
@@ -1589,7 +1607,10 @@ class PlaybackService : MediaLibraryService() {
             artist = state.artist,
             album = state.album,
             artwork = effectiveArtwork,
-            artworkUri = state.artworkUrl?.let { Uri.parse(it) }
+            artworkUri = state.artworkUrl?.let { Uri.parse(it) },
+            albumArtist = state.albumArtist,
+            year = state.year,
+            trackNumber = state.track
         )
 
         broadcastMetadataToControllers(
@@ -2808,7 +2829,7 @@ class PlaybackService : MediaLibraryService() {
         Log.d(TAG, "MediaLibrarySession initialized with browse tree support")
     }
 
-    private inner class LibraryCallback : MediaLibrarySession.Callback {
+    internal inner class LibraryCallback : MediaLibrarySession.Callback {
 
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
@@ -2990,7 +3011,7 @@ class PlaybackService : MediaLibraryService() {
                 .add(SessionCommand(COMMAND_PREVIOUS, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_SWITCH_GROUP, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_GET_STATS, Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_ALLOW_PAIRING, Bundle.EMPTY))
+                .apply { if (isOwnApp(controller)) add(SessionCommand(COMMAND_ALLOW_PAIRING, Bundle.EMPTY)) }
                 .add(SessionCommand(COMMAND_SET_SEARCH_FOR_SERVERS, Bundle.EMPTY))
                 .build()
 
@@ -3013,6 +3034,17 @@ class PlaybackService : MediaLibraryService() {
         ) {
             Log.i(TAG, "Controller disconnected: ${controller.packageName} (uid=${controller.uid})")
         }
+
+        /**
+         * Whether [controller] is this app's own UI, the only one allowed to
+         * send [COMMAND_ALLOW_PAIRING]. That command lifts the round limit's
+         * hold-back and resets the count, which `pairing.md#rounds` asks to
+         * be "a deliberate, manufacturer-defined operator action". This
+         * service is exported, so any other app could otherwise press it and
+         * guess pairing codes without limit.
+         */
+        private fun isOwnApp(controller: MediaSession.ControllerInfo): Boolean =
+            controller.uid == Process.myUid()
 
         override fun onCustomCommand(
             session: MediaSession,
@@ -3121,6 +3153,12 @@ class PlaybackService : MediaLibraryService() {
                 }
 
                 COMMAND_ALLOW_PAIRING -> {
+                    // Never offered to another app (onConnect), and refused
+                    // here too should one send it anyway.
+                    if (!isOwnApp(controller)) {
+                        Log.w(TAG, "Allow pairing refused from ${controller.packageName} (uid=${controller.uid})")
+                        return Futures.immediateFuture(SessionResult(SessionError.ERROR_PERMISSION_DENIED))
+                    }
                     Log.d(TAG, "Allow pairing gesture confirmed")
                     // Cleared here, at the operator's tap, rather than waiting on a
                     // round trip through the flow: the gate is a local UI concern,
