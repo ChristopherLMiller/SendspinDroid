@@ -11,10 +11,12 @@ import androidx.media3.session.MediaController
 import com.sendspindroid.playback.PlaybackService
 import com.sendspindroid.ui.main.MainActivityViewModel
 import com.sendspindroid.ui.main.TrackMetadata
+import com.sendspindroid.ui.main.albumArtistToShow
 import io.mockk.every
 import io.mockk.mockk
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,7 +31,8 @@ import org.robolectric.annotation.Config
  * The album artist and year reach Now Playing's metadata through each of the
  * two feeds that race to set it: the session extras, and the Media3
  * MediaMetadata, which the activity reads both when it changes and when it
- * resumes. A feed that left them out would wipe what the other had set.
+ * resumes. A feed that left them out would wipe what the other had set, and
+ * one that kept the last track's would show them on a track that has none.
  *
  * Set up like [MainActivityRecreateTest]: Robolectric runs no media session,
  * so the controller is a stand-in put where the connected one would be.
@@ -49,6 +52,23 @@ class MainActivityTrackMetadataTest {
         .setRecordingYear(1999)
         .build()
 
+    // A track the server sent no album artist or year for: the forwarding
+    // player puts the track artist in for the album artist.
+    private val radioEdit = MediaMetadata.Builder()
+        .setTitle("Radio Edit")
+        .setArtist("Queen")
+        .setAlbumTitle("Singles")
+        .setAlbumArtist("Queen")
+        .build()
+
+    // With no artist either, there is nothing to put in for the album artist.
+    private val interlude = MediaMetadata.Builder()
+        .setTitle("Interlude")
+        .setAlbumTitle("Singles")
+        .build()
+
+    private val controller = mockk<MediaController>(relaxed = true)
+
     @Before
     fun refuseServiceBind() {
         shadowOf(app).declareComponentUnbindable(ComponentName(app, PlaybackService::class.java))
@@ -60,7 +80,6 @@ class MainActivityTrackMetadataTest {
     }
 
     private fun resumeOver(mediaMetadata: MediaMetadata): ActivityController<MainActivity> {
-        val controller = mockk<MediaController>(relaxed = true)
         every { controller.playbackState } returns Player.STATE_READY
         every { controller.isPlaying } returns true
         every { controller.sessionExtras } returns Bundle()
@@ -113,6 +132,36 @@ class MainActivityTrackMetadataTest {
         val metadata = activity.metadata()
         assertEquals("Various Artists", metadata.albumArtist)
         assertEquals(1999, metadata.year)
+    }
+
+    @Test
+    fun `a change of the Media3 metadata to a track without them drops the year and the album artist`() {
+        val activity = resumeOver(compilation)
+
+        activity.mediaMetadataChanges(radioEdit)
+
+        val metadata = activity.metadata()
+        assertNull(metadata.year)
+        assertNull(albumArtistToShow(metadata))
+    }
+
+    @Test
+    fun `a change of the Media3 metadata to a track without an artist drops the last track's album artist`() {
+        val activity = resumeOver(compilation)
+
+        activity.mediaMetadataChanges(interlude)
+
+        assertEquals(TrackMetadata("Interlude", "", "Singles"), activity.metadata())
+    }
+
+    @Test
+    fun `a resume over a track without them drops the last track's year and album artist`() {
+        val activity = resumeOver(compilation)
+
+        every { controller.mediaMetadata } returns interlude
+        activity.pause().resume()
+
+        assertEquals(TrackMetadata("Interlude", "", "Singles"), activity.metadata())
     }
 
     @Test
