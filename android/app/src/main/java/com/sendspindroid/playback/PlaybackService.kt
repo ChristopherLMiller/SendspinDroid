@@ -1948,6 +1948,8 @@ class PlaybackService : MediaLibraryService() {
         Log.d(TAG, "Set current server: $serverId")
 
         _currentServerFlow.value = serverId?.let { UnifiedServerRepository.getServer(it) }
+        // Kept for a restart by the system, which starts a new process.
+        UserSettings.dialledServerId = serverId
     }
 
     /**
@@ -3460,15 +3462,18 @@ class PlaybackService : MediaLibraryService() {
     /**
      * The service was killed and the system has started it again. While
      * advertising, onCreate has put the listener back and the server
-     * reconnects to it. While searching nothing would: connect to the default
-     * server, as at boot. Nothing records the server last connected to, so
-     * that is the one to return to.
+     * reconnects to it. While searching nothing would: connect to the server
+     * it was on, which [setCurrentServer] recorded. The service is left
+     * started only while it is connected or trying to be, so that is the
+     * server it was killed on. One that is not saved (found on mDNS) cannot
+     * be looked up again; then the default server, as at boot.
      */
     private fun handleRestart() {
         if (connectionMode.isAdvertising) return
-        val server = UnifiedServerRepository.getDefaultServer()
+        val server = UserSettings.dialledServerId?.let { UnifiedServerRepository.getServer(it) }
+            ?: UnifiedServerRepository.getDefaultServer()
         if (server == null) {
-            Log.i(TAG, "Restarted with no default server to connect to")
+            Log.i(TAG, "Restarted with no server to connect to")
             return
         }
         Log.i(TAG, "Restarted: connecting to ${server.name} (${server.id})")

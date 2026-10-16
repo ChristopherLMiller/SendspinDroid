@@ -221,6 +221,26 @@ class PlaybackServiceStartConnectTest {
     }
 
     @Test
+    fun `a restart returns to the server it was connected to, not the default`() {
+        searchForServers(true)
+        val kitchen = UnifiedServer(id = "server-2", name = "Kitchen", local = LocalConnection("192.168.1.101:8927"))
+        every { UnifiedServerRepository.getServer(kitchen.id) } returns kitchen
+        // The user picked Kitchen, and was connected to it when the system
+        // killed the service.
+        val first = Robolectric.buildService(PlaybackService::class.java).create()
+        first.get().setCurrentServer(kitchen.id)
+        first.get().connectToServer(kitchen.local!!.address)
+        clientState.value = TransportState.Ready
+        idle()
+        first.destroy()
+        clientState.value = TransportState.Idle
+
+        restartBySystem()
+
+        assertEquals(kitchen.id, attempting()?.serverId)
+    }
+
+    @Test
     fun `a restart in search mode with no default server does nothing`() {
         searchForServers(true)
         every { UnifiedServerRepository.getDefaultServer() } returns null
