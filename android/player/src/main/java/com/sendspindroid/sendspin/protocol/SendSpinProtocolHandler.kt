@@ -110,6 +110,10 @@ abstract class SendSpinProtocolHandler(
     private val metadataLock = Any()
     private var pendingMetadata: Job? = null
 
+    // Scheduled colors (roles/color/v1.md), held the same way as metadata.
+    private val colorLock = Any()
+    private var pendingColor: Job? = null
+
     // Controller (group-level) state from the latest server/state.
     private var currentControllerState: ControllerState? = null
 
@@ -237,6 +241,12 @@ abstract class SendSpinProtocolHandler(
      * Default no-op for handlers that don't surface controller state.
      */
     protected open fun onControllerStateUpdate(state: ControllerState) {}
+
+    /**
+     * Called when a `color` state becomes current. Null means the role has no
+     * state any more: it was removed by `server/activate`.
+     */
+    protected open fun onColorStateUpdate(state: ColorState?) {}
 
     /**
      * Called when the audio output should be silenced or unsilenced because
@@ -1392,6 +1402,12 @@ abstract class SendSpinProtocolHandler(
             currentControllerState = null
             onControllerStateUpdate(ControllerState())
         }
+        if (SendSpinProtocol.Roles.COLOR in removed) {
+            synchronized(colorLock) {
+                discardPendingColor()
+                onColorStateUpdate(null)
+            }
+        }
     }
 
     /**
@@ -1892,8 +1908,10 @@ abstract class SendSpinProtocolHandler(
         // Each object is carried "only if the ... role is active".
         val metadata = parsed.metadata.takeIf { roleActive(SendSpinProtocol.Roles.METADATA) }
         val controller = parsed.controller.takeIf { roleActive(SendSpinProtocol.Roles.CONTROLLER) }
+        val color = parsed.color.takeIf { roleActive(SendSpinProtocol.Roles.COLOR) }
 
         if (metadata != null) scheduleMetadata(metadata)
+        if (color != null) scheduleColor(color)
 
         if (state != null && state != lastPlaybackState) {
             lastPlaybackState = state
@@ -1955,12 +1973,61 @@ abstract class SendSpinProtocolHandler(
     }
 
     /**
+     * roles/color/v1.md, "Scheduled color updates": "Clients keep a current
+     * state plus at most one pending update. The current state is the most
+     * recently applied `color` object and is what the client renders from."
+     * Here that is whatever [onColorStateUpdate] last delivered.
+     *
+     * "A message whose `timestamp`, translated to the local clock via the
+     * time filter (current best estimate, no waiting for convergence), is
+     * still in the future becomes the pending update, replacing any held one,
+     * and is applied when that moment is reached. A message whose translated
+     * timestamp is in the past or present is applied immediately and discards
+     * any held pending update." Before the filter has any estimate there is
+     * nothing to translate with, so the state is applied at once. That is
+     * right for the first state of a connection or of a re-added role, which
+     * messaging.md says "MUST carry a past or present `timestamp`".
+     */
+    private fun scheduleColor(color: ColorState) = synchronized(colorLock) {
+        discardPendingColor()
+        val filter = getTimeFilter()
+        val timestamp = color.timestamp
+        val delayMicros = if (timestamp == null || !filter.isReady) {
+            0L
+        } else {
+            filter.serverToClient(timestamp) - System.nanoTime() / 1000
+        }
+        if (delayMicros <= 0) {
+            onColorStateUpdate(color)
+            return@synchronized
+        }
+        Log.d(tag, "Color pending for ${delayMicros / 1000}ms")
+        pendingColor = getCoroutineScope().launch {
+            delay(delayMicros / 1000)
+            // A cancel takes the same lock, so an update discarded while this
+            // was waiting for it is no longer active here.
+            synchronized(colorLock) {
+                if (isActive) {
+                    pendingColor = null
+                    onColorStateUpdate(color)
+                }
+            }
+        }
+    }
+
+    private fun discardPendingColor() {
+        pendingColor?.cancel()
+        pendingColor = null
+    }
+
+    /**
      * Forget the `server/state` roles when a connection ends, so a metadata
-     * update still pending cannot come due afterwards. Does not touch what is
-     * on display.
+     * or color update still pending cannot come due afterwards. Does not
+     * touch what is on display.
      */
     private fun resetServerState() {
         synchronized(metadataLock) { discardPendingMetadata() }
+        synchronized(colorLock) { discardPendingColor() }
         currentControllerState = null
     }
 

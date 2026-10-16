@@ -7,6 +7,7 @@ import com.sendspindroid.sendspin.pairing.PairAbortReason
 import com.sendspindroid.sendspin.pairing.PairingOutcome
 import com.sendspindroid.sendspin.protocol.Activity
 import com.sendspindroid.sendspin.protocol.AdmissionState
+import com.sendspindroid.sendspin.protocol.ColorState
 import com.sendspindroid.sendspin.protocol.ConnectionAdmission
 import com.sendspindroid.sendspin.protocol.ControllerState
 import com.sendspindroid.sendspin.protocol.GroupInfo
@@ -255,6 +256,11 @@ class SendSpin(
     // server/state controller object.
     private val _controllerState = MutableStateFlow<ControllerState?>(null)
     val controllerState: StateFlow<ControllerState?> = _controllerState.asStateFlow()
+
+    // The current server/state color object (roles/color/v1.md). Null until
+    // the first one, after the role is removed, and after the connection ends.
+    private val _colorState = MutableStateFlow<ColorState?>(null)
+    val colorState: StateFlow<ColorState?> = _colorState.asStateFlow()
 
     // Transport abstraction - WebSocket. Assigned and cleared under
     // connectionLock; read from the timer thread.
@@ -918,6 +924,10 @@ class SendSpin(
         _controllerState.value = state
     }
 
+    override fun onColorStateUpdate(state: ColorState?) {
+        _colorState.value = state
+    }
+
     // ========== Public API ==========
 
     /**
@@ -1204,6 +1214,7 @@ class SendSpin(
             matchedPsk = null
             sessionFacts = null
             _controllerState.value = null
+            _colorState.value = null
             connectedAtMs = null
 
             // Before the state changes, so whoever reacts to the new state

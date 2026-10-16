@@ -703,6 +703,7 @@ class TestProtocolHandler(
     val sentMessages = mutableListOf<String>()
     val metadataUpdates = mutableListOf<TrackMetadata>()
     val controllerStateUpdates = mutableListOf<ControllerState>()
+    val colorStateUpdates = mutableListOf<ColorState?>()
     val playbackStateChanges = mutableListOf<String>()
     val groupUpdates = mutableListOf<GroupInfo>()
     val streamStarts = mutableListOf<StreamConfig>()
@@ -825,6 +826,10 @@ class TestProtocolHandler(
 
     override fun onControllerStateUpdate(state: ControllerState) {
         controllerStateUpdates.add(state)
+    }
+
+    override fun onColorStateUpdate(state: ColorState?) {
+        colorStateUpdates.add(state)
     }
 
     override fun onPlaybackStateChanged(state: String) {
