@@ -210,6 +210,9 @@ class PlaybackServiceMetadataTest {
         // A metadata object with only a timestamp: the server has no track.
         metadataArrives(TrackMetadata(timestamp = 3))
 
+        // With no title and no artist the session shows SendSpinPlayer's
+        // item, which never carries a subtitle. The " - " guard for the
+        // subtitle built from the track is in the no-album and no-artist tests.
         val session = sessionMetadata()
         assertNull(session.title)
         assertNull(session.artist)
