@@ -14,6 +14,9 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.webSocket
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
@@ -65,6 +68,18 @@ class SendspinWebSocketServer(
 
         /** RFC 6455: "an endpoint is going away". */
         private const val CLOSE_GOING_AWAY = 1001
+
+        /**
+         * For what fails in the engine's own coroutines, which with no
+         * handler goes to the thread's uncaught-exception handler: on
+         * Android, the end of the process. A port that is taken is one: the
+         * engine binds it in a coroutine of its own, so the failure ends
+         * that coroutine as well as reaching [start], which tries another
+         * port. Anything that ends the engine later is another.
+         */
+        private val engineFailures = CoroutineExceptionHandler { _, e ->
+            Log.w(TAG, "Listener engine failed: $e")
+        }
     }
 
     private var server: EmbeddedServer<*, *>? = null
@@ -96,8 +111,13 @@ class SendspinWebSocketServer(
         return port
     }
 
+    // GlobalScope is the scope embeddedServer() without one uses: the engine
+    // is ended by stop(), not by a scope. Only the handler is added.
+    @OptIn(DelicateCoroutinesApi::class)
     private fun bind(port: Int): Pair<EmbeddedServer<*, *>, Int> {
-        val candidate = embeddedServer(CIO, port = port, host = "0.0.0.0") {
+        val candidate = GlobalScope.embeddedServer(
+            CIO, port = port, host = "0.0.0.0", parentCoroutineContext = engineFailures,
+        ) {
             // No Sendspin server is a web page, and a page is the one kind
             // of peer that always says where it came from. Refused before
             // the upgrade, so before anything is allocated for it.
