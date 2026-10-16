@@ -573,14 +573,21 @@ class MainActivity : AppCompatActivity() {
                 windowSizeClass = windowSizeClass,
                 isTv = isTvDevice
             )
-            // Observe layout mode reactively so changes in Settings take effect immediately
+            // Observe layout mode and Album colors reactively so changes in
+            // Settings take effect immediately
             val layoutModeState = remember {
                 mutableStateOf(UserSettings.layoutMode)
+            }
+            val serverColorsEnabled = remember {
+                mutableStateOf(UserSettings.serverColors)
             }
             DisposableEffect(Unit) {
                 val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
                     if (key == UserSettings.KEY_LAYOUT_MODE) {
                         layoutModeState.value = UserSettings.layoutMode
+                    }
+                    if (key == UserSettings.KEY_SERVER_COLORS) {
+                        serverColorsEnabled.value = UserSettings.serverColors
                     }
                 }
                 PreferenceManager.getDefaultSharedPreferences(this@MainActivity)
@@ -599,6 +606,7 @@ class MainActivity : AppCompatActivity() {
             }
 
             val savedServers by UnifiedServerRepository.savedServers.collectAsStateWithLifecycle()
+            val serverColors by PlaybackService.serverColors.collectAsStateWithLifecycle()
 
             SendSpinTheme {
                 ProvideFormFactor(formFactor) {
@@ -658,7 +666,10 @@ class MainActivity : AppCompatActivity() {
                         canEditServer = savedServers.any { it.id == currentConnectedServerId },
                         // As Android 12 and later do for the launcher's activity: the
                         // app keeps its state and keeps playing.
-                        onLeaveApp = { moveTaskToBack(true) }
+                        onLeaveApp = { moveTaskToBack(true) },
+                        // Album colors off: a connection made while it was on
+                        // still receives the palette until it ends, unshown
+                        serverColors = serverColors.takeIf { serverColorsEnabled.value }
                     )
                 }
             }

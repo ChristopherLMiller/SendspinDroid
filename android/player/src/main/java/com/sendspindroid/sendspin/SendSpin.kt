@@ -517,6 +517,8 @@ class SendSpin(
     override fun isUnpairedAccessEnabled(): Boolean =
         pairingConfigStore.load().unpairedAccessEnabled
 
+    override fun claimsColorRole(): Boolean = host.serverColors
+
     /**
      * The category that admitted this connection, defaulting to the Sentinel
      * before a handshake has matched anything - the least-privileged answer,
