@@ -22,6 +22,7 @@ import com.sendspindroid.model.UnifiedServer
 import com.sendspindroid.coordinator.TransportState
 import com.sendspindroid.sendspin.SendSpin
 import com.sendspindroid.sendspin.SendSpinEndpoint
+import com.sendspindroid.sendspin.protocol.TrackMetadata
 import com.sendspindroid.ui.theme.SendSpinTheme
 import com.sendspindroid.ui.wizard.AddServerWizardScreen
 import com.sendspindroid.ui.wizard.ConnectionTestState
@@ -60,10 +61,7 @@ class AddServerWizardActivity : AppCompatActivity() {
     private val noopSendSpinCallback = object : SendSpin.Callback {
         override fun onStateChanged(state: String) {}
         override fun onGroupUpdate(groupId: String, groupName: String, playbackState: String) {}
-        override fun onMetadataUpdate(
-            title: String, artist: String, album: String,
-            artworkUrl: String, durationMs: Long, positionMs: Long, playbackSpeed: Int
-        ) {}
+        override fun onMetadataUpdate(metadata: TrackMetadata, positionMs: Long) {}
         override fun onArtwork(imageData: ByteArray) {}
         override fun onArtworkCleared() {}
         override fun onStreamStart(codec: String, sampleRate: Int, channels: Int, bitDepth: Int, codecHeader: ByteArray?) {}

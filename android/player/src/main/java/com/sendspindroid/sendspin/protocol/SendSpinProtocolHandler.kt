@@ -1481,8 +1481,10 @@ abstract class SendSpinProtocolHandler(
     }
 
     /**
-     * The operator performed the "Allow pairing" gesture, ending a
-     * gesture-gated wait on an escalated attempt.
+     * The operator performed the "Allow pairing" gesture: the "deliberate,
+     * manufacturer-defined operator action" (`pairing.md#rounds`) that lifts
+     * the round limit's hold-back on the waiting attempt and resets the
+     * round count.
      */
     fun confirmDynamicPairingGesture() {
         if (activePairingMethod == PairMethod.DYNAMIC_PAIRING_CODE) {
@@ -1767,11 +1769,13 @@ abstract class SendSpinProtocolHandler(
 
     private fun handleServerPairInit(payload: JsonObject?) {
         if (!dynamicPairingMessageExpected("server/pair-init")) return
-        val nonceA = MessageParser.parseServerPairInit(payload)
-        if (nonceA == null) {
+        val nonce = MessageParser.parseServerPairInit(payload)
+        if (nonce == null) {
             onProtocolFailure("malformed server/pair-init")
             return
         }
+        // Absent after client/pair-retry; the flow judges the round.
+        val nonceA = (nonce as? MessageParser.ServerPairInitNonce.Present)?.nonceA
         runDynamicPairingActions(DynamicPairingEvent.ServerPairInit(nonceA))
     }
 
@@ -1842,6 +1846,14 @@ abstract class SendSpinProtocolHandler(
                     sendProtocolMessage(MessageBuilder.buildClientPairAuth(action.yb))
 
                 is DynamicPairingAction.SendPairAbort -> sendPairAbort(action.reason)
+
+                // The attempt timer keeps running across rounds: "A retry
+                // keeps the attempt, its pairing code, and its running
+                // attempt timeout in place".
+                DynamicPairingAction.SendPairRetry -> {
+                    Log.i(tag, "Dynamic pairing: server_kc did not verify; sending client/pair-retry")
+                    sendProtocolMessage(MessageBuilder.buildClientPairRetry())
+                }
 
                 is DynamicPairingAction.SendPairConfirm ->
                     sendProtocolMessage(
