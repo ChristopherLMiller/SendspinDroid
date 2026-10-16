@@ -75,7 +75,12 @@ class SendspinWebSocketServer(
          * Android, the end of the process. A port that is taken is one: the
          * engine binds it in a coroutine of its own, so the failure ends
          * that coroutine as well as reaching [start], which tries another
-         * port. Anything that ends the engine later is another.
+         * port. A failure that ended the engine after [start] had returned
+         * would be another, and it is only logged: nothing would be
+         * listening any more, and the owner is not told. No such failure is
+         * known in Ktor 3.1.1: its accept loop goes on past an I/O error,
+         * and a connection that fails, which is logged here too, ends on its
+         * own.
          */
         private val engineFailures = CoroutineExceptionHandler { _, e ->
             Log.w(TAG, "Listener engine failed: $e")
