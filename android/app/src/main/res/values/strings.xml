@@ -184,6 +184,7 @@
     <string name="pairing_token_summary">Paste this into your server to pair this device. Copy it whole, without spaces or dashes.</string>
     <string name="pairing_token_qr_hint">Scan to copy the token to another device</string>
     <string name="pairing_token_qr_hint_tv">Scan with your phone to get the token, then paste it into your server</string>
+    <string name="pairing_token_qr_description">QR code of this device\'s pairing token</string>
     <string name="pairing_token_copy">Copy pairing token</string>
     <string name="pairing_token_copied">Pairing token copied</string>
     <string name="pairing_token_secret_warning">Treat this like a password: anyone who has it can pair with this device.</string>
