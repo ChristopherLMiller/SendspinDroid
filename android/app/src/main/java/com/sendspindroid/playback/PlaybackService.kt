@@ -396,7 +396,7 @@ class PlaybackService : MediaLibraryService() {
     private var volumeObserverRegistered: Boolean = false  // Track registration state to prevent leaks
     private var lastKnownVolume: Int = -1  // Track to detect external volume changes
     private var lastOutputType: Int? = null  // The output lastKnownVolume was set or synced on
-    private val fullVolumeOutputs = mutableSetOf<Int>()  // Outputs setVolume found holding the index at max
+    private val fullVolumeOutputs = mutableSetOf<Int>()  // Outputs setVolume found holding the index at max, kept in UserSettings
 
     // Audio focus management - required for Android Auto to hand over audio output
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -1109,13 +1109,20 @@ class PlaybackService : MediaLibraryService() {
         }
 
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        fullVolumeOutputs += UserSettings.getFullVolumeOutputs()
 
         // Track current volume to detect external changes
         lastKnownVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
         lastOutputType = audioManager?.let { mediaOutputType(it) }
 
-        // Initialize playback state with actual device volume (not default 100%)
-        val volumePercent = audioManager?.let { deviceVolumePercent(it, lastKnownVolume) } ?: 0
+        // Initialize playback state with actual device volume (not default 100%),
+        // or, where the index cannot hold one, the volume last set on the output
+        val restored = audioManager?.let { restoredVolume(it, lastKnownVolume, mediaOutputType(it)) }
+        restored?.let {
+            Log.i(TAG, "Volume $it restored as track gain on output type $lastOutputType")
+            engine.setTrackGain(VolumeLaw.amplitude(it))
+        }
+        val volumePercent = restored ?: audioManager?.let { deviceVolumePercent(it, lastKnownVolume) } ?: 0
         _playbackState.value = _playbackState.value.copy(volume = volumePercent)
 
         // Create observer to detect volume changes from hardware buttons
@@ -1573,10 +1580,13 @@ class PlaybackService : MediaLibraryService() {
     private fun updateMediaSessionArtwork(bitmap: Bitmap) {
         val state = _playbackState.value
 
+        // The state holds the metadata role's full state (messaging.md,
+        // server/state), so a null text field is one the track has none of.
+        // It goes on as "", which clears it; null would keep the last track's.
         forwardingPlayer?.updateMetadata(
-            title = state.title,
-            artist = state.artist,
-            album = state.album,
+            title = state.title.orEmpty(),
+            artist = state.artist.orEmpty(),
+            album = state.album.orEmpty(),
             artwork = bitmap,
             artworkUri = state.artworkUrl?.let { Uri.parse(it) },
             albumArtist = state.albumArtist,
@@ -1598,10 +1608,12 @@ class PlaybackService : MediaLibraryService() {
     private fun updateMediaMetadata(title: String, artist: String, album: String) {
         val state = _playbackState.value
 
+        // "" clears a text field the track has none of, as in
+        // updateMediaSessionArtwork.
         forwardingPlayer?.updateMetadata(
-            title = state.title,
-            artist = state.artist,
-            album = state.album,
+            title = state.title.orEmpty(),
+            artist = state.artist.orEmpty(),
+            album = state.album.orEmpty(),
             artwork = effectiveArtwork,
             artworkUri = state.artworkUrl?.let { Uri.parse(it) },
             albumArtist = state.albumArtist,
@@ -2026,7 +2038,8 @@ class PlaybackService : MediaLibraryService() {
      * The spec asks for `amplitude = (volume / 100)^1.5` (roles/player/v1.md),
      * so the index is picked from the device's own curve and the rest is gain
      * on the track ([VolumeLaw]). On a fixed-volume or full-volume output the
-     * whole of it is track gain.
+     * whole of it is track gain, and it is kept for that output
+     * ([UserSettings.getOutputVolume]), as Android keeps none there.
      *
      * Main thread only.
      *
@@ -2043,6 +2056,7 @@ class PlaybackService : MediaLibraryService() {
         if (am.isVolumeFixed) {
             Log.d(TAG, "Fixed-volume output: volume $percent as track gain")
             engine.setTrackGain(VolumeLaw.amplitude(percent))
+            UserSettings.setOutputVolume(mediaOutputType(am), percent)
             return
         }
 
@@ -2071,16 +2085,17 @@ class PlaybackService : MediaLibraryService() {
         // the index is read back.
         val applied = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         when {
-            applied == newVolume ->
-                engine.setTrackGain(curve?.let { VolumeLaw.trackGainFor(percent, newVolume, it) } ?: 1f)
-            VolumeLaw.isFullVolumeOutput(newVolume, applied, maxVolume) -> {
+            VolumeLaw.isFullVolumeSet(output in fullVolumeOutputs, newVolume, applied, maxVolume) -> {
                 // The index stays at max: the whole volume is track gain, as
                 // on a fixed-volume output, and the volume asked for plays.
                 Log.d(TAG, "Full-volume output: volume $percent as track gain")
                 lastKnownVolume = applied
-                fullVolumeOutputs += output
+                if (fullVolumeOutputs.add(output)) UserSettings.setFullVolumeOutputs(fullVolumeOutputs)
                 engine.setTrackGain(VolumeLaw.amplitude(percent))
+                UserSettings.setOutputVolume(output, percent)
             }
+            applied == newVolume ->
+                engine.setTrackGain(curve?.let { VolumeLaw.trackGainFor(percent, newVolume, it) } ?: 1f)
             else -> {
                 // The platform holds the index below what was asked (the safe
                 // media volume warning): report what actually plays.
@@ -2141,6 +2156,21 @@ class PlaybackService : MediaLibraryService() {
         return if (index == lastKnownVolume) _playbackState.value.volume else deviceVolumePercent(am, index)
     }
 
+    /**
+     * Media plays on an output setVolume found to be full-volume (its type
+     * from the same mediaOutputType, so below API 33 too), with the index
+     * still at max.
+     */
+    private fun isFullVolume(am: AudioManager, output: Int, index: Int): Boolean =
+        output in fullVolumeOutputs && index == am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+
+    /**
+     * The volume last set on [output], where media plays on it at STREAM_MUSIC
+     * [index] and that index cannot hold one ([VolumeLaw.restoredVolume]).
+     */
+    private fun restoredVolume(am: AudioManager, index: Int, output: Int): Int? =
+        VolumeLaw.restoredVolume(am.isVolumeFixed, isFullVolume(am, output, index), UserSettings.getOutputVolume(output))
+
     /** The protocol volume (0-100) that STREAM_MUSIC [index] stands for on the current output. */
     private fun deviceVolumePercent(am: AudioManager, index: Int): Int {
         val curve = deviceVolumeCurve(am)
@@ -2186,14 +2216,20 @@ class PlaybackService : MediaLibraryService() {
         val am = audioManager ?: return@Runnable
         val index = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         val output = mediaOutputType(am)
-        // An output setVolume found to be full-volume (its type from the same
-        // mediaOutputType, so below API 33 too), with the index still at max
-        val fullVolume = output in fullVolumeOutputs && index == am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val fullVolume = isFullVolume(am, output, index)
         when (VolumeLaw.outputChange(am.isVolumeFixed, fullVolume, index, lastKnownVolume, output, lastOutputType)) {
             VolumeLaw.OutputChange.KEEP_VOLUME -> {
                 lastKnownVolume = index
                 lastOutputType = output
-                setVolume(_playbackState.value.volume / 100f)
+                // The volume last set on this output, else the one playing
+                val playing = _playbackState.value.volume
+                val volume = restoredVolume(am, index, output) ?: playing
+                setVolume(volume / 100f)
+                if (volume != playing) {
+                    Log.i(TAG, "Volume $volume restored as track gain on output type $output")
+                    sendSpinClient?.setVolume(volume / 100.0)
+                    broadcastSessionExtras()
+                }
             }
             VolumeLaw.OutputChange.NONE -> Unit
             VolumeLaw.OutputChange.DEVICE_VOLUME -> {
