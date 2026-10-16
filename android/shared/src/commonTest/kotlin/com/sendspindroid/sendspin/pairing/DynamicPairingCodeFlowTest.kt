@@ -461,6 +461,42 @@ class DynamicPairingCodeFlowTest {
     }
 
     /**
+     * Only the tap that lifts a hold-back resets the count: the client holds
+     * attempts back "until a deliberate, manufacturer-defined operator action,
+     * which also resets the count". A stray tap anywhere else - a double tap,
+     * or a command that lands after the attempt has moved on - must leave the
+     * round budget alone.
+     */
+    @Test
+    fun `an Allow pairing tap outside the hold-back leaves the round count alone`() {
+        val store = FakeStore(5)
+        val f = DynamicPairingCodeFlow(ByteArray(32), PairingFailureCounter(store), NoiseCipherSuite.CHACHA_POLY)
+        fun strayTap(where: String, count: Int) {
+            assertEquals(emptyList<DynamicPairingAction>(), f.onEvent(DynamicPairingEvent.WindowOpened), where)
+            assertEquals(count, store.value, where)
+        }
+
+        strayTap("idle", 5)
+        f.onEvent(DynamicPairingEvent.PairingActivation(pairingIndex = 1))
+        strayTap("awaiting server/pair-init", 5)
+        f.onEvent(DynamicPairingEvent.ServerPairInit(ByteArray(32) { 5 }))
+        strayTap("awaiting server/pair-auth", 6)
+        f.onEvent(DynamicPairingEvent.ServerPairAuth(VALID_SHARE))
+        assertEquals(
+            listOf<DynamicPairingAction>(DynamicPairingAction.SendPairRetry),
+            f.onEvent(DynamicPairingEvent.ServerPairConfirm(ByteArray(64))),
+        )
+        strayTap("awaiting the next round", 6)
+
+        // Nor once the round limit has ended the attempt: the next one must
+        // still be held back.
+        val limited = FakeStore(19)
+        val (aborted, _, _) = mismatched(limited)
+        assertEquals(emptyList<DynamicPairingAction>(), aborted.onEvent(DynamicPairingEvent.WindowOpened))
+        assertEquals(20, limited.value)
+    }
+
+    /**
      * Drives the flow end to end with a genuinely valid `server_kc`, computed
      * by playing the CPace initiator (server) side directly against
      * [CPaceX25519]'s primitives -- the same primitives [CPaceResponder]
