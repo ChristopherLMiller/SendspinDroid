@@ -314,13 +314,14 @@ during device acceptance and record the result of each:
   `MainActivity.onAllowPairingClicked()`** -- confirm the gesture-gated
   "Allow pairing" button actually reaches the service via the MediaSession
   custom command and unblocks the pending pairing attempt.
-- **A wrong code producing `pair/abort` with `pairing_code_mismatch` and the
-  UI recovering** -- see step 4 in the plan; confirm the app shows a clear
-  failure state and lets the operator retry rather than getting stuck.
-- **Five failed attempts escalating the sixth to the gesture gate, and a
-  success de-escalating** -- confirm the attempt counter is per-pairing-
-  session state that a subsequent success actually clears, not a counter
-  that stays escalated forever once tripped.
+- **A wrong code producing `client/pair-retry` with the same code still
+  shown** -- confirm the code stays on screen through the retry and the
+  right code then pairs in the same attempt.
+- **The round limit: 20 wrong codes producing `pair/abort` with
+  `pairing_code_mismatch`, the next attempt held back, and Allow pairing
+  resetting the count** -- confirm the app shows a clear failure state, then
+  the Allow pairing button, and that one wrong code after the tap is retried
+  rather than aborted (`pair-dynamic wrong=20`, then `pair-dynamic wrong=1`).
 - **MediaSession IPC delivery, TalkBack announcing the code, and on-screen
   legibility across a room** -- confirm the six digits reach the UI promptly
   over the MediaSession IPC boundary, that TalkBack reads the code aloud
