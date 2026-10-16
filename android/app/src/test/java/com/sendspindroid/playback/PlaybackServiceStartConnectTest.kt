@@ -11,6 +11,7 @@ import com.sendspindroid.UserSettings
 import com.sendspindroid.coordinator.FailureReason
 import com.sendspindroid.coordinator.ReconnectStatus
 import com.sendspindroid.coordinator.TransportState
+import com.sendspindroid.discovery.NsdDiscoveryManager
 import com.sendspindroid.model.LocalConnection
 import com.sendspindroid.model.UnifiedServer
 import com.sendspindroid.sendspin.SendSpin
@@ -21,6 +22,7 @@ import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.runs
 import io.mockk.unmockkAll
+import io.mockk.verify
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -124,6 +126,15 @@ class PlaybackServiceStartConnectTest {
         assertEquals(TransportState.Connecting, clientState.value)
     }
 
+    /** What the loop's mDNS discovery hears servers through. */
+    private fun reconnectDiscovery(service: PlaybackService): NsdDiscoveryManager.DiscoveryListener {
+        val manager = PlaybackService::class.java.getDeclaredField("reconnectDiscoveryManager")
+            .apply { isAccessible = true }.get(service)
+        assertNotNull("the loop watches mDNS", manager)
+        return NsdDiscoveryManager::class.java.getDeclaredField("listener")
+            .apply { isAccessible = true }.get(manager) as NsdDiscoveryManager.DiscoveryListener
+    }
+
     private fun attempting(): ReconnectStatus.Attempting? =
         PlaybackService.reconnectStatus.value as? ReconnectStatus.Attempting
 
@@ -192,6 +203,25 @@ class PlaybackServiceStartConnectTest {
 
         assertEquals(2, attempting()?.attempt)
         assertFalse("the service has not stopped itself", shadowOf(service).isStoppedBySelf)
+    }
+
+    @Test
+    fun `a server seen on mDNS under its service name has its saved address refreshed`() {
+        // Saved under its service name, not the friendly name in its TXT
+        // record: addDiscoveredServer, which refreshes by friendly name,
+        // misses it, and each attempt reads the saved address.
+        searchForServers(true)
+        every { UnifiedServerRepository.refreshSavedServerAddressById(any(), any()) } returns true
+        val service = startForBoot()
+
+        reconnectDiscovery(service).onServerDiscovered(
+            name = defaultServer.name,
+            address = "192.168.1.150:8927",
+            path = "/sendspin",
+            friendlyName = "Music Assistant",
+        )
+
+        verify { UnifiedServerRepository.refreshSavedServerAddressById(defaultServer.id, "192.168.1.150:8927") }
     }
 
     @Test

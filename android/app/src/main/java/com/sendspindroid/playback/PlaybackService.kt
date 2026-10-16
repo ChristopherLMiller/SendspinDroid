@@ -1918,6 +1918,10 @@ class PlaybackService : MediaLibraryService() {
             override fun onServerDiscovered(name: String, address: String, path: String, friendlyName: String) {
                 UnifiedServerRepository.addDiscoveredServer(friendlyName, address, path)
                 if (isSameServer(server, name, friendlyName, address)) {
+                    // addDiscoveredServer refreshes a saved server by its
+                    // friendly name only, and this one may be saved under
+                    // its service name.
+                    UnifiedServerRepository.refreshSavedServerAddressById(server.id, address)
                     Log.i(TAG, "${server.name} seen on mDNS at $address - retrying now")
                     coordinator.retryNow()
                 }
