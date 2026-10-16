@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -98,6 +99,8 @@ class TvMenuEntry(
  * @param footerEntries Entries kept at the bottom, such as Settings.
  * @param header Shown above the entries; told whether the menu is open.
  * @param onLeave Back pressed in the open menu.
+ * @param menuColorScheme The colors of the open menu, a panel over the
+ *   screen. The collapsed menu is on the screen's background, in its colors.
  */
 @Composable
 fun TvShell(
@@ -107,6 +110,7 @@ fun TvShell(
     onLeave: () -> Unit,
     modifier: Modifier = Modifier,
     header: @Composable ColumnScope.(open: Boolean) -> Unit = {},
+    menuColorScheme: ColorScheme = M3Theme.colorScheme,
     content: @Composable () -> Unit,
 ) {
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -144,18 +148,18 @@ fun TvShell(
     }
 
     val m3 = M3Theme.colorScheme
-    val menuBackground = m3.surfaceContainer
 
     ModalNavigationDrawer(
         modifier = modifier,
         drawerState = drawerState,
         scrimBrush = SolidColor(m3.scrim.copy(alpha = 0.6f)),
         drawerContent = { value ->
-            TvMaterialTheme {
+            val open = value == DrawerValue.Open
+            TvMaterialTheme(if (open) menuColorScheme else M3Theme.colorScheme) {
                 Column(
                     modifier = Modifier
                         .fillMaxHeight()
-                        .background(if (value == DrawerValue.Open) menuBackground else Color.Transparent)
+                        .background(if (open) menuColorScheme.surfaceContainer else Color.Transparent)
                         .padding(horizontal = RailPadding, vertical = TvOverscanVertical)
                         // Focus in the collapsed menu: the first key opens it
                         .onPreviewKeyEvent { event ->
@@ -232,12 +236,11 @@ private fun NavigationDrawerScope.MenuItem(
 }
 
 /**
- * The app's Material3 colours, for the Compose for TV components of the menu,
- * which read their own MaterialTheme.
+ * [m3] for the menu: as the Material3 colours, and for the Compose for TV
+ * components, which read their own MaterialTheme.
  */
 @Composable
-private fun TvMaterialTheme(content: @Composable () -> Unit) {
-    val m3 = M3Theme.colorScheme
+private fun TvMaterialTheme(m3: ColorScheme, content: @Composable () -> Unit) {
     val colorScheme = remember(m3) {
         darkColorScheme(
             primary = m3.primary,
@@ -271,5 +274,7 @@ private fun TvMaterialTheme(content: @Composable () -> Unit) {
             borderVariant = m3.outlineVariant,
         )
     }
-    MaterialTheme(colorScheme = colorScheme, content = content)
+    M3Theme(colorScheme = m3) {
+        MaterialTheme(colorScheme = colorScheme, content = content)
+    }
 }

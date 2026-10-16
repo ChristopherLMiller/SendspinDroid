@@ -389,8 +389,9 @@ private fun ConnectedShell(
  * menu: a dot while it is collapsed, the server's name with it when open.
  *
  * [serverColors] color the frame while connected, so the collapsed menu's
- * rail is on the same background as Now Playing. The open menu keeps its
- * Material container.
+ * rail is on the same background as Now Playing. The open menu, a panel over
+ * the screen, keeps the Material colors, as menus do: the spec's contrast for
+ * `on_X` holds only on the server's background.
  *
  * @param onEditServerClick Null when the connection is not to a saved server.
  */
@@ -433,6 +434,7 @@ private fun TvAppShell(
         entries = listOf(TvMenuEntry(stringResource(R.string.add_server), Icons.Default.Add, onAddServerClick))
     }
 
+    val material = MaterialTheme.colorScheme
     ServerColorTheme(serverColors.takeIf { connected }) {
         Surface(
             modifier = modifier.fillMaxSize(),
@@ -444,7 +446,8 @@ private fun TvAppShell(
                 entries = entries,
                 footerEntries = listOf(settings, exit),
                 onLeave = onLeaveApp,
-                header = { open -> TvMenuHeader(connectionState, open) }
+                header = { open -> TvMenuHeader(connectionState, open) },
+                menuColorScheme = material
             ) {
                 if (connected) nowPlaying() else serverListContent()
             }

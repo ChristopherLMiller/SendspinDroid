@@ -5,11 +5,18 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PixelMap
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.sendspindroid.model.AppConnectionState
 import com.sendspindroid.sendspin.protocol.ColorState
@@ -17,6 +24,7 @@ import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.main.MainActivityViewModel
 import com.sendspindroid.ui.theme.SendSpinTheme
+import com.sendspindroid.ui.theme.contrast
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -51,7 +59,7 @@ class AppShellServerColorsTest {
         onLight = 0xFF221E3E.toInt(),
     )
 
-    private fun show(formFactor: FormFactor, state: AppConnectionState): PixelMap {
+    private fun show(formFactor: FormFactor, state: AppConnectionState, colors: ColorState = palette): PixelMap {
         composeTestRule.runOnUiThread { viewModel.updateConnectionState(state) }
         composeTestRule.setContent {
             CompositionLocalProvider(LocalFormFactor provides formFactor) {
@@ -72,14 +80,16 @@ class AppShellServerColorsTest {
                         onSettingsClick = {},
                         onEditServerClick = {},
                         onExitAppClick = {},
-                        serverColors = palette,
+                        serverColors = colors,
                     )
                 }
             }
         }
         composeTestRule.waitForIdle()
-        return composeTestRule.onRoot().captureToImage().toPixelMap()
+        return capture()
     }
+
+    private fun capture(): PixelMap = composeTestRule.onRoot().captureToImage().toPixelMap()
 
     private val connected = AppConnectionState.Connected("Kitchen Server", "192.168.1.4:8927")
 
@@ -130,5 +140,55 @@ class AppShellServerColorsTest {
 
         assertMaterial("menu rail", screen[2, screen.height / 2])
         assertMaterial("server list", screen[screen.width - 2, screen.height - 2])
+    }
+
+    /**
+     * Music Assistant's palette for a dark cover: no candidate reaches its
+     * preferred 7:1, so on_dark is at the 4.5:1 floor on a black background.
+     */
+    private val darkCover = ColorState(
+        timestamp = 1,
+        backgroundDark = 0xFF000000.toInt(),
+        backgroundLight = 0xFFB8BABE.toInt(),
+        onDark = 0xFF72747E.toInt(),
+        onLight = 0xFF23283C.toInt(),
+    )
+
+    /** The color [text] is laid out in, alpha included. */
+    private fun textColor(text: String): Color {
+        val layouts = mutableListOf<TextLayoutResult>()
+        composeTestRule.onNodeWithText(text, useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        return layouts.single().layoutInput.style.color
+    }
+
+    /**
+     * The open menu is a Material panel over the screen, and menus keep the
+     * Material theme. roles/color/v1.md guarantees `on_dark` "4.5:1 with
+     * `background_dark`" and with black text, not with Material's containers,
+     * so the server's name and the selected entry are in the Material colors
+     * too.
+     */
+    @Test
+    @Config(qualifiers = "w960dp-h540dp-land")
+    fun `on a TV the open menu's text keeps 4_5 to 1 on its Material panel`() {
+        show(FormFactor.TV, connected, darkCover)
+        composeTestRule.runOnUiThread { composeTestRule.activity.onBackPressedDispatcher.onBackPressed() }
+        composeTestRule.waitForIdle()
+        // Focus off Now Playing, which is then selected but not focused
+        composeTestRule.onNodeWithText("Switch Server").requestFocus()
+        composeTestRule.waitForIdle()
+        val screen = capture()
+
+        val panel = screen[2, screen.height / 2]
+        val name = contrast(textColor("Kitchen Server").compositeOver(panel), panel)
+        assertTrue("server name is $name", name >= 4.5)
+
+        // The selected entry, on its container at the entry's far end
+        val entry = composeTestRule.onNodeWithText("Now Playing").fetchSemanticsNode().boundsInRoot
+        val inset = with(composeTestRule.density) { 4.dp.toPx() }
+        val container = screen[(entry.right - inset).toInt(), entry.center.y.toInt()]
+        val selected = contrast(textColor("Now Playing").compositeOver(container), container)
+        assertTrue("selected entry is $selected on $container", selected >= 4.5)
     }
 }
