@@ -65,6 +65,7 @@ object UserSettings {
     const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
     const val KEY_SEARCH_FOR_SERVERS = "search_for_servers"
     const val KEY_LAST_PLAYBACK_SERVER_ID = "last_playback_server_id"
+    const val KEY_DIALLED_SERVER_ID = "dialled_server_id"
     const val KEY_PAIRED_SERVER_NAME_PREFIX = "paired_server_name_"
 
     // Long-term PSK records from pairing (stored in encrypted prefs).
@@ -492,12 +493,16 @@ object UserSettings {
     /**
      * Whether High Power Mode is enabled.
      * When enabled (for always-on/plugged-in devices):
-     * - WiFi and CPU locks held for entire connection (not just streaming)
+     * - WiFi and CPU locks held for entire connection (not just streaming),
+     *   and kept while it reconnects
      * - WiFi lock uses low-latency mode (API 29+)
-     * - Screen kept on while connected
-     * - Infinite reconnection attempts (30s steady-state interval)
-     * - Faster WebSocket ping (15s vs 30s) for quicker drop detection
-     * - Prompts user to exempt app from battery optimization
+     * - Screen kept on while connected or reconnecting, on MainActivity's window
+     * - Faster WebSocket ping (15s vs 30s, read through AppSendSpinHost) for
+     *   quicker drop detection
+     * - Settings offers to exempt the app from battery optimization
+     *
+     * Reconnecting is the same either way: no attempt cap, backing off to one
+     * attempt a minute (ConnectionCoordinator).
      */
     val highPowerMode: Boolean
         get() = prefs?.getBoolean(KEY_HIGH_POWER_MODE, false) ?: false
@@ -548,6 +553,15 @@ object UserSettings {
     var lastPlaybackServerId: String?
         get() = prefs?.getString(KEY_LAST_PLAYBACK_SERVER_ID, null)
         set(value) { prefs?.edit()?.putString(KEY_LAST_PLAYBACK_SERVER_ID, value)?.apply() }
+
+    /**
+     * The server (UnifiedServer.id, not a Sendspin `server_id`) the service
+     * last set out to connect to, null once the user has disconnected. A
+     * restart by the system returns to it.
+     */
+    var dialledServerId: String?
+        get() = prefs?.getString(KEY_DIALLED_SERVER_ID, null)
+        set(value) { prefs?.edit()?.putString(KEY_DIALLED_SERVER_ID, value)?.apply() }
 
     /**
      * What a paired server last called itself, by `server_id`, for the list

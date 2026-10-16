@@ -35,6 +35,10 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        // BOOT_COMPLETED only. The receiver is exported, and BOOT_COMPLETED
+        // is a broadcast only the system can send; QUICKBOOT_POWERON (old HTC
+        // fast boots) is not protected, so any app could send it to start a
+        // connection.
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
         UserSettings.initialize(context)

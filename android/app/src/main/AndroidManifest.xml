@@ -227,14 +227,13 @@
             BootReceiver: Auto-start PlaybackService on device boot
             - Only active when user enables "Auto-start on boot" in settings
             - Connects to the configured default server without launching UI
-            - Handles BOOT_COMPLETED (standard) and QUICKBOOT_POWERON (HTC/some OEMs)
+            - Handles BOOT_COMPLETED only, which only the system can send
         -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 
