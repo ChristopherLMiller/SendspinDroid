@@ -65,6 +65,7 @@ import com.sendspindroid.model.UnifiedServer
 import com.sendspindroid.sendspin.SendSpin
 import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.protocol.AdmissionState
+import com.sendspindroid.sendspin.protocol.ColorState
 import com.sendspindroid.sendspin.SendSpinEndpoint
 import com.sendspindroid.discovery.DiscoveryGate
 import com.sendspindroid.discovery.NsdAdvertiser
@@ -438,6 +439,11 @@ class PlaybackService : MediaLibraryService() {
         private val _artistArtwork = MutableStateFlow<ByteArray?>(null)
         val artistArtwork: StateFlow<ByteArray?> = _artistArtwork.asStateFlow()
 
+        // The colors the server sends for the current audio (color@v1).
+        // In-process, like the artist image: only the activity reads them.
+        private val _serverColors = MutableStateFlow<ColorState?>(null)
+        val serverColors: StateFlow<ColorState?> = _serverColors.asStateFlow()
+
         private const val TAG = "PlaybackService"
 
         // How long after an output is connected or removed its volume is read
@@ -793,7 +799,7 @@ class PlaybackService : MediaLibraryService() {
 
     private var clientObserver: Job? = null
 
-    /** Follow [client]'s connection and controller state. One client at a time. */
+    /** Follow [client]'s connection, controller state and colors. One client at a time. */
     private fun observeClient(client: SendSpin) {
         clientObserver?.cancel()
         clientObserver = serviceScope.launch {
@@ -803,6 +809,7 @@ class PlaybackService : MediaLibraryService() {
                     sendSpinPlayer?.updateControllerState(state)
                 }
             }
+            launch { client.colorState.collect { _serverColors.value = it } }
             client.connectionState.collect { state -> onClientState(state) }
         }
     }
@@ -886,6 +893,7 @@ class PlaybackService : MediaLibraryService() {
                 // Clear playback state on disconnect
                 _playbackState.value = _playbackState.value.withConnectionEnded()
                 _artistArtwork.value = null
+                _serverColors.value = null
                 lastArtworkUrl = null
                 lastTrackTitle = null
                 urlArtwork = null
