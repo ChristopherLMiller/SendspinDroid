@@ -39,9 +39,12 @@ import com.sendspindroid.ui.theme.SendSpinTheme
  * Shown in place of the transport controls rather than over them: with no
  * active roles there is nothing for the controls to act on, so leaving them
  * on screen offers the user buttons that silently do nothing. Alongside
- * playback the display is the code's out-channel, which the client suspends
- * "for the duration of the attempt" (pairing.md, Entering and leaving
- * pairing).
+ * playback the display is also the code's out-channel, so the artwork it
+ * shows is the output the client "suspends ... for the duration of the
+ * attempt" (pairing.md, Entering and leaving pairing), and this takes Now
+ * Playing's place. The Allow pairing prompt comes before the attempt
+ * ("client/pair-pending precedes an attempt and does not start it") and
+ * takes its place the same way.
  *
  * [AdmissionState.READY] must never reach here - the caller passes PAIRING
  * for a prompt alongside playback, and otherwise returns early on it - so
