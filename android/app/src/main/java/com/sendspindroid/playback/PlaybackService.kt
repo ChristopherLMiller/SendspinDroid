@@ -66,6 +66,7 @@ import com.sendspindroid.model.UnifiedServer
 import com.sendspindroid.sendspin.SendSpin
 import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.protocol.AdmissionState
+import com.sendspindroid.sendspin.protocol.TrackMetadata
 import com.sendspindroid.sendspin.SendSpinEndpoint
 import com.sendspindroid.discovery.DiscoveryGate
 import com.sendspindroid.discovery.NsdAdvertiser
@@ -1321,17 +1322,19 @@ class PlaybackService : MediaLibraryService() {
         }
 
         @OptIn(UnstableApi::class)
-        override fun onMetadataUpdate(
-            title: String,
-            artist: String,
-            album: String,
-            artworkUrl: String,
-            durationMs: Long,
-            positionMs: Long,
-            playbackSpeed: Int
-        ) {
+        override fun onMetadataUpdate(metadata: TrackMetadata, positionMs: Long) {
+            // Null means the server has no value for the field. The text
+            // fields carry that on as "".
+            val title = metadata.title.orEmpty()
+            val artist = metadata.artist.orEmpty()
+            val album = metadata.album.orEmpty()
+            val artworkUrl = metadata.artworkUrl.orEmpty()
+            val durationMs = metadata.durationMs
+            // No progress object means no position, so nothing to advance.
+            val playbackSpeed = metadata.progress?.playbackSpeed ?: 0
             mainHandler.post {
-                Log.d(TAG, "Metadata update: $title / $artist / $album")
+                Log.d(TAG, "Metadata update: $title / $artist / $album, album artist " +
+                    "${metadata.albumArtist}, year ${metadata.year}, track ${metadata.track}")
 
                 // server/state carries the role's full state, so "" here
                 // means the track has no such field. It is passed on as "",
@@ -1343,7 +1346,10 @@ class PlaybackService : MediaLibraryService() {
                     artworkUrl = artworkUrl,
                     durationMs = durationMs,
                     positionMs = positionMs,
-                    playbackSpeed = playbackSpeed
+                    playbackSpeed = playbackSpeed,
+                    albumArtist = metadata.albumArtist,
+                    year = metadata.year,
+                    track = metadata.track
                 )
 
                 // Update the player's media item for lock screen/notification
@@ -1561,7 +1567,10 @@ class PlaybackService : MediaLibraryService() {
             artist = state.artist,
             album = state.album,
             artwork = bitmap,
-            artworkUri = state.artworkUrl?.let { Uri.parse(it) }
+            artworkUri = state.artworkUrl?.let { Uri.parse(it) },
+            albumArtist = state.albumArtist,
+            year = state.year,
+            trackNumber = state.track
         )
 
         broadcastMetadataToControllers(
@@ -1583,7 +1592,10 @@ class PlaybackService : MediaLibraryService() {
             artist = state.artist,
             album = state.album,
             artwork = effectiveArtwork,
-            artworkUri = state.artworkUrl?.let { Uri.parse(it) }
+            artworkUri = state.artworkUrl?.let { Uri.parse(it) },
+            albumArtist = state.albumArtist,
+            year = state.year,
+            trackNumber = state.track
         )
 
         broadcastMetadataToControllers(
