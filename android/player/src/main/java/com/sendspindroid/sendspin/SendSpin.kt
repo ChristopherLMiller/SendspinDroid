@@ -158,7 +158,8 @@ class SendSpin(
          * metadata updates", "the most recently applied `metadata` object".
          * It is the role's full state (messaging.md, server/state), so a null
          * field has no value. [positionMs] is the track position extrapolated
-         * to now.
+         * to now ("Calculating current track position"), or the position as
+         * reported, at the metadata's timestamp, until the clock has converged.
          */
         fun onMetadataUpdate(metadata: TrackMetadata, positionMs: Long)
         fun onArtwork(imageData: ByteArray)
