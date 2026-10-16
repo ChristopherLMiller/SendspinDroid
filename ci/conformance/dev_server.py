@@ -39,6 +39,7 @@ try:
     )
     from aiosendspin.noise.pairing_token import decode_psk_token
     from aiosendspin.noise.trust_store import PAIRING_ROUND_LIMIT, FileServerPairingStore
+    from aiosendspin.server.roles.color import Color
     from aiosendspin.server.roles.controller.events import ControllerEvent
     from aiosendspin.server.roles.metadata import Metadata
     from aiosendspin.server.server import SendspinServer
@@ -59,6 +60,27 @@ DEFAULT_PORT = 8927
 # --play-test-audio: 16-bit stereo at 48 kHz, in 100 ms chunks.
 TEST_AUDIO_FORMAT = AudioFormat(sample_rate=48000, bit_depth=16, channels=2)
 TEST_AUDIO_CHUNK_FRAMES = 4800
+
+# --send-test-colors: two palettes with every field set, blue then red. Color
+# refuses a palette that misses one of the spec's 4.5:1 contrast pairs.
+TEST_COLORS = (
+    Color(
+        background_dark=(18, 52, 86),
+        background_light=(220, 232, 245),
+        primary=(40, 100, 180),
+        accent=(230, 140, 40),
+        on_dark=(170, 210, 250),
+        on_light=(20, 60, 110),
+    ),
+    Color(
+        background_dark=(90, 20, 30),
+        background_light=(250, 225, 225),
+        primary=(200, 40, 50),
+        accent=(40, 160, 150),
+        on_dark=(255, 200, 200),
+        on_light=(110, 20, 30),
+    ),
+)
 
 
 def test_audio_chunk(first_frame: int) -> bytes:
@@ -459,6 +481,52 @@ class DevServer:
             await asyncio.sleep(15.0)
         LOGGER.info("test metadata: done")
 
+    async def send_test_colors(self) -> None:
+        """Send a palette to the first color client, schedule a second, then clear.
+
+        The first applies at once. The second is scheduled ten seconds ahead,
+        inside the 20 seconds a server may send it early, so it goes out now: a
+        client that follows roles/color/v1.md holds it as its pending update
+        and applies it ten seconds after the "scheduled" line, not on receipt.
+        The clear is a color object with only a timestamp. Each color object
+        this sends is logged as JSON. The one the role sends when it is
+        activated, with only a timestamp, goes out before the role is listed
+        here, so it is not logged; only the client shows it.
+        """
+        assert self._server is not None
+        while True:
+            target = next(
+                (
+                    (client, role)
+                    for client in self._server.connected_clients
+                    for role in client.roles_by_family("color")
+                ),
+                None,
+            )
+            if target is not None:
+                break
+            await asyncio.sleep(0.5)
+        client, role = target
+
+        send_message = role.send_message
+
+        def logged_send_message(message) -> None:
+            LOGGER.info("test colors: sent %s", message.to_json())
+            send_message(message)
+
+        role.send_message = logged_send_message
+        color = client.group.group_role("color")
+        # The activation's own current state goes out first.
+        await asyncio.sleep(1.0)
+        color.set_color(TEST_COLORS[0])
+        LOGGER.info("test colors: palette A current")
+        await asyncio.sleep(3.0)
+        color.set_color(TEST_COLORS[1], timestamp_us=self._server.clock.now_us() + 10_000_000)
+        LOGGER.info("test colors: palette B scheduled for +10s")
+        await asyncio.sleep(14.0)
+        color.clear()
+        LOGGER.info("test colors: done")
+
     async def pair_with_token(self, token_file: Path) -> None:
         """Pair, by Pairing PSK, with the client whose token is in `token_file`.
 
@@ -739,6 +807,12 @@ def build_parser() -> argparse.ArgumentParser:
         "metadata client",
     )
     parser.add_argument(
+        "--send-test-colors",
+        action="store_true",
+        help="send a color palette to the first color client, schedule a second "
+        "for 10s later, then clear the colors",
+    )
+    parser.add_argument(
         "--offer-seek",
         type=int,
         default=None,
@@ -803,6 +877,8 @@ async def run(args: argparse.Namespace) -> int:
             await server.send_test_artwork()
         if args.send_test_metadata:
             await server.send_test_metadata()
+        if args.send_test_colors:
+            await server.send_test_colors()
         if args.play_test_audio:
             await server.play_test_audio(args.play_test_audio)
         if args.pair_token_file:
@@ -814,7 +890,8 @@ async def run(args: argparse.Namespace) -> int:
 
     test_audio = None
     if (args.offer_seek is not None or args.send_test_artwork or args.send_test_metadata
-            or args.play_test_audio or args.pair_token_file or args.pair_dynamic_code_file):
+            or args.send_test_colors or args.play_test_audio or args.pair_token_file
+            or args.pair_dynamic_code_file):
         test_audio = asyncio.create_task(scripted())
         test_audio.add_done_callback(
             lambda task: task.cancelled() or task.exception() is None

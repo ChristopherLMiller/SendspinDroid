@@ -178,6 +178,19 @@ client: it reassembles them with the app's `ArtworkReceiver` and passes only if
 an image arrived in more than one part and the last one was cleared. Both sides
 print each image's SHA-256, which must match.
 
+`--send-test-colors` makes the server send a color palette to the first client
+with the color role, then, three seconds later, a second palette scheduled ten
+seconds ahead, and then clear the colors. Each color object the option sends is
+logged as a `test colors: sent` line. The one the server sends when it
+activates the role, with only a `timestamp`, goes out before logging starts,
+so only the client shows it. The second palette goes out at once with a
+future `timestamp`, so a client that follows roles/color/v1.md holds it as its
+pending update: the app logs `Color pending for` about 10000ms when it arrives,
+and should show it ten seconds after the server's `palette B scheduled` line,
+not on receipt. The clear is a color object with only a `timestamp`.
+NoiseHandshakeCheck prints what it receives but does not check colors; the
+check is the app's.
+
 To exercise the in-band re-handshake as well, add
 `--pair-token-file <identity-file>.token` to the server and
 `--expect-rehandshake` to the client. The tool writes its pairing token to that

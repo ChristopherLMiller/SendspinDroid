@@ -159,6 +159,24 @@ class FakeSendSpinServer(
     }
 
     /**
+     * Send a server/state carrying only a `color` object, current at once.
+     */
+    fun sendColorState() {
+        val msg = buildJsonObject {
+            put("type", "server/state")
+            put("payload", buildJsonObject {
+                put("color", buildJsonObject {
+                    put("timestamp", 0)
+                    put("background_dark", buildJsonArray {
+                        listOf(18, 52, 86).forEach { add(JsonPrimitive(it)) }
+                    })
+                })
+            })
+        }
+        transport.simulateTextMessage(msg.toString())
+    }
+
+    /**
      * Send a group/update message.
      */
     fun sendGroupUpdate(

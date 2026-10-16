@@ -67,6 +67,10 @@ object MessageBuilder {
      *   ever carry playback: the spec permits `'playback'` on an unpaired
      *   session "only when the client has unpaired access enabled", so omitting
      *   it leaves the server no choice but empty activities.
+     * @param colorRole whether to list `color@v1`. It is not tied to
+     *   [lowMemoryMode]: the role costs a few hundred bytes of JSON a track.
+     *   It has no support object, which messaging.md defines only for the
+     *   player, source and visualizer roles.
      */
     fun buildClientHello(
         deviceName: String,
@@ -77,6 +81,7 @@ object MessageBuilder {
         softwareVersion: String = "unknown",
         unpairedAccessEnabled: Boolean = true,
         supportedPairMethods: List<PairMethodDescriptor> = listOf(PairMethodDescriptor.PAIRING_PSK),
+        colorRole: Boolean = true,
     ): String {
         val message = buildJsonObject {
             put("type", SendSpinProtocol.MessageType.CLIENT_HELLO)
@@ -88,6 +93,9 @@ object MessageBuilder {
                     add(kotlinx.serialization.json.JsonPrimitive(SendSpinProtocol.Roles.METADATA))
                     if (!lowMemoryMode) {
                         add(kotlinx.serialization.json.JsonPrimitive(SendSpinProtocol.Roles.ARTWORK))
+                    }
+                    if (colorRole) {
+                        add(kotlinx.serialization.json.JsonPrimitive(SendSpinProtocol.Roles.COLOR))
                     }
                 })
                 put("device_info", buildJsonObject {

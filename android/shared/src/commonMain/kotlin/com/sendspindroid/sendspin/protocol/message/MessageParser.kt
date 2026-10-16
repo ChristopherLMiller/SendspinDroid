@@ -1,6 +1,7 @@
 package com.sendspindroid.sendspin.protocol.message
 
 import com.sendspindroid.sendspin.crypto.Base64Url
+import com.sendspindroid.sendspin.protocol.ColorState
 import com.sendspindroid.sendspin.protocol.ControllerState
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -145,6 +146,7 @@ object MessageParser {
         metadata = (payload?.get("metadata") as? JsonObject)?.let(::parseMetadata),
         playbackState = payload?.stringOrDefault("state", "")?.takeIf { it.isNotEmpty() },
         controller = (payload?.get("controller") as? JsonObject)?.let(::parseController),
+        color = (payload?.get("color") as? JsonObject)?.let(::parseColor),
     )
 
     private fun parseMetadata(obj: JsonObject): TrackMetadata = TrackMetadata(
@@ -174,6 +176,32 @@ object MessageParser {
         shuffle = obj["shuffle"]?.booleanOrNull(),
         seekMaxMs = obj["seek_max_ms"]?.longOrNull(),
     )
+
+    private fun parseColor(obj: JsonObject): ColorState = ColorState(
+        timestamp = obj["timestamp"]?.longOrNull(),
+        backgroundDark = obj["background_dark"]?.rgbOrNull(),
+        backgroundLight = obj["background_light"]?.rgbOrNull(),
+        primary = obj["primary"]?.rgbOrNull(),
+        accent = obj["accent"]?.rgbOrNull(),
+        onDark = obj["on_dark"]?.rgbOrNull(),
+        onLight = obj["on_light"]?.rgbOrNull(),
+    )
+
+    /**
+     * roles/color/v1.md gives every color as "integer[] ... `[R, G, B]` with
+     * values 0-255", packed here as 0xFFRRGGBB. Anything else has no value. A
+     * string is not an integer, though intOrNull would read "12" as one.
+     */
+    private fun JsonElement.rgbOrNull(): Int? {
+        val channels = (this as? JsonArray)?.takeIf { it.size == 3 } ?: return null
+        var argb = 0xFF
+        for (channel in channels) {
+            val value = (channel as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+            if (value == null || value !in 0..255) return null
+            argb = (argb shl 8) or value
+        }
+        return argb
+    }
 
     /**
      * Music Assistant sends the four-character string "null" for an absent
