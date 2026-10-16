@@ -1,6 +1,8 @@
 package com.sendspindroid.ui.theme
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -68,28 +70,32 @@ private fun mix(color: Color, toward: Color, fraction: Float) = Color(
  * updates": "Clients MAY ease into the pending update around its timestamp
  * (e.g. a color blend)." A palette already there when this is first shown
  * is used at once.
+ *
+ * @param blend False to show each change at once: for a frame around other
+ *   screens too, such as the TV's around the server list, which has the
+ *   Material colors from its first frame.
  */
 @Composable
-fun ServerColorTheme(colors: ColorState?, content: @Composable () -> Unit) {
+fun ServerColorTheme(colors: ColorState?, blend: Boolean = true, content: @Composable () -> Unit) {
     val base = MaterialTheme.colorScheme
     val server = colors?.let { base.withServerColors(it, LocalIsDarkTheme.current) }
     val target = server ?: base
+    // Snapped while not blending, so a later blend starts from what is shown
+    val spec: AnimationSpec<Color> = if (blend) tween(BlendMillis) else snap()
+    val blended = base.copy(
+        background = blendTo(target.background, spec),
+        surface = blendTo(target.surface, spec),
+        onBackground = blendTo(target.onBackground, spec),
+        onSurface = blendTo(target.onSurface, spec),
+        primary = blendTo(target.primary, spec),
+        onPrimary = blendTo(target.onPrimary, spec),
+        onSurfaceVariant = blendTo(target.onSurfaceVariant, spec),
+        secondaryContainer = blendTo(target.secondaryContainer, spec),
+        onSecondaryContainer = blendTo(target.onSecondaryContainer, spec),
+        surfaceVariant = blendTo(target.surfaceVariant, spec),
+    )
     CompositionLocalProvider(LocalServerColors provides (server != null)) {
-        MaterialTheme(
-            colorScheme = base.copy(
-                background = blend(target.background),
-                surface = blend(target.surface),
-                onBackground = blend(target.onBackground),
-                onSurface = blend(target.onSurface),
-                primary = blend(target.primary),
-                onPrimary = blend(target.onPrimary),
-                onSurfaceVariant = blend(target.onSurfaceVariant),
-                secondaryContainer = blend(target.secondaryContainer),
-                onSecondaryContainer = blend(target.onSecondaryContainer),
-                surfaceVariant = blend(target.surfaceVariant),
-            ),
-            content = content,
-        )
+        MaterialTheme(colorScheme = if (blend) blended else target, content = content)
     }
 }
 
@@ -106,6 +112,7 @@ val LocalServerColors = compositionLocalOf { false }
 
 /** One of the roles [withServerColors] sets, on its way to [color]. */
 @Composable
-private fun blend(color: Color): Color = animateColorAsState(color, tween(BlendMillis), label = "serverColor").value
+private fun blendTo(color: Color, spec: AnimationSpec<Color>): Color =
+    animateColorAsState(color, spec, label = "serverColor").value
 
 private const val BlendMillis = 600

@@ -25,6 +25,7 @@ import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.main.MainActivityViewModel
 import com.sendspindroid.ui.theme.SendSpinTheme
 import com.sendspindroid.ui.theme.contrast
+import com.sendspindroid.ui.theme.md_theme_dark_background
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -140,6 +141,31 @@ class AppShellServerColorsTest {
 
         assertMaterial("menu rail", screen[2, screen.height / 2])
         assertMaterial("server list", screen[screen.width - 2, screen.height - 2])
+    }
+
+    /**
+     * The server list keeps the Material colors from its first frame: the
+     * frame Now Playing was in does not blend from the album colors into it.
+     */
+    @Test
+    @Config(qualifiers = "w960dp-h540dp-land")
+    fun `on a TV leaving the connection shows the server list in the Material colors at once`() {
+        show(FormFactor.TV, connected)
+
+        // The clock is stepped by hand, so the first frame is what is drawn
+        composeTestRule.mainClock.autoAdvance = false
+        composeTestRule.runOnUiThread { viewModel.updateConnectionState(AppConnectionState.ServerList) }
+        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeByFrame()
+        val screen = capture()
+        val pixel = screen[2, screen.height / 2]
+
+        assertTrue(
+            "menu rail is $pixel",
+            abs(pixel.red - md_theme_dark_background.red) <= 1.5f / 255 &&
+                abs(pixel.green - md_theme_dark_background.green) <= 1.5f / 255 &&
+                abs(pixel.blue - md_theme_dark_background.blue) <= 1.5f / 255
+        )
     }
 
     /**

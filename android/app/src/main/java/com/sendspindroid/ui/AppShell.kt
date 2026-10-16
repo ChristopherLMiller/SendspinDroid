@@ -435,7 +435,8 @@ private fun TvAppShell(
     }
 
     val material = MaterialTheme.colorScheme
-    ServerColorTheme(serverColors.takeIf { connected }) {
+    // Not blended out of when leaving: the server list keeps the Material colors
+    ServerColorTheme(serverColors.takeIf { connected }, blend = connected) {
         Surface(
             modifier = modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,

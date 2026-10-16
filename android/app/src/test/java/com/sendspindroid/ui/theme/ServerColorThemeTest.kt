@@ -42,11 +42,11 @@ class ServerColorThemeTest {
     private var base: ColorScheme? = null
     private var seen: ColorScheme? = null
 
-    private fun show(colors: () -> ColorState?, dark: Boolean = true) {
+    private fun show(colors: () -> ColorState?, dark: Boolean = true, blend: () -> Boolean = { true }) {
         composeTestRule.setContent {
             SendSpinTheme(darkTheme = dark, dynamicColor = false) {
                 base = MaterialTheme.colorScheme
-                ServerColorTheme(colors()) { seen = MaterialTheme.colorScheme }
+                ServerColorTheme(colors(), blend()) { seen = MaterialTheme.colorScheme }
             }
         }
         composeTestRule.waitForIdle()
@@ -90,6 +90,30 @@ class ServerColorThemeTest {
         colors = null
         composeTestRule.waitForIdle()
         composeTestRule.mainClock.advanceTimeBy(1_000)
+        assertEquals(base.toString(), seen.toString())
+    }
+
+    @Test
+    fun `without blending a change is shown at once, and a later blend starts from it`() {
+        var colors by mutableStateOf<ColorState?>(palette)
+        var blend by mutableStateOf(true)
+        show({ colors }, blend = { blend })
+
+        // The clock is stepped by hand; waitForIdle takes the change and the
+        // frame after it draws
+        composeTestRule.mainClock.autoAdvance = false
+        colors = null
+        blend = false
+        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeByFrame()
+        assertEquals(base.toString(), seen.toString())
+
+        // Blending again soon after, with nothing new: no fade from what was
+        // left behind
+        composeTestRule.mainClock.advanceTimeBy(100)
+        blend = true
+        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeByFrame()
         assertEquals(base.toString(), seen.toString())
     }
 
