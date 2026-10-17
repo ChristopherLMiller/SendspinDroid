@@ -87,6 +87,7 @@ fun NowPlayingScreen(
     onNextClick: () -> Unit,
     onSwitchGroupClick: () -> Unit,
     onVolumeChange: (Float) -> Unit,
+    onMuteToggle: () -> Unit,
     onSeek: (Long) -> Unit,
     onOpenPairingClick: () -> Unit,
     onAllowPairingClick: () -> Unit,
@@ -99,6 +100,7 @@ fun NowPlayingScreen(
     val groupName by viewModel.groupName.collectAsStateWithLifecycle()
     val artworkSource by viewModel.artworkSource.collectAsStateWithLifecycle()
     val volume by viewModel.volume.collectAsStateWithLifecycle()
+    val muted by viewModel.muted.collectAsStateWithLifecycle()
     val reconnectingState by viewModel.reconnectingState.collectAsStateWithLifecycle()
     val playerColors by viewModel.playerColors.collectAsStateWithLifecycle()
     val positionMs by viewModel.positionMs.collectAsStateWithLifecycle()
@@ -248,6 +250,8 @@ fun NowPlayingScreen(
                     onNextClick = onNextClick,
                     onSwitchGroupClick = onSwitchGroupClick,
                     onVolumeChange = onVolumeChange,
+                    muted = muted,
+                    onMuteToggle = onMuteToggle,
                     seekable = seekable && controlsEnabled,
                     onSeek = onSeek,
                     controlsFormFactor = controlsFormFactor,
@@ -274,6 +278,8 @@ fun NowPlayingScreen(
                     onNextClick = onNextClick,
                     onSwitchGroupClick = onSwitchGroupClick,
                     onVolumeChange = onVolumeChange,
+                    muted = muted,
+                    onMuteToggle = onMuteToggle,
                     seekable = seekable && controlsEnabled,
                     onSeek = onSeek,
                     controlsFormFactor = controlsFormFactor
@@ -329,6 +335,8 @@ private fun NowPlayingPortrait(
     onNextClick: () -> Unit,
     onSwitchGroupClick: () -> Unit,
     onVolumeChange: (Float) -> Unit,
+    muted: Boolean = false,
+    onMuteToggle: () -> Unit = {},
     seekable: Boolean = false,
     onSeek: (Long) -> Unit = {},
     controlsFormFactor: FormFactor = LocalFormFactor.current,
@@ -461,6 +469,8 @@ private fun NowPlayingPortrait(
 
             // Volume Slider
             VolumeSlider(
+                muted = muted,
+                onMuteToggle = onMuteToggle,
                 volume = volume,
                 onVolumeChange = onVolumeChange,
                 enabled = controlsEnabled,
@@ -495,6 +505,8 @@ private fun NowPlayingLandscape(
     onNextClick: () -> Unit,
     onSwitchGroupClick: () -> Unit,
     onVolumeChange: (Float) -> Unit,
+    muted: Boolean = false,
+    onMuteToggle: () -> Unit = {},
     seekable: Boolean = false,
     onSeek: (Long) -> Unit = {},
     controlsFormFactor: FormFactor = LocalFormFactor.current,
@@ -627,6 +639,8 @@ private fun NowPlayingLandscape(
 
                 // Volume Slider
                 VolumeSlider(
+                    muted = muted,
+                    onMuteToggle = onMuteToggle,
                     volume = volume,
                     onVolumeChange = onVolumeChange,
                     enabled = controlsEnabled,
