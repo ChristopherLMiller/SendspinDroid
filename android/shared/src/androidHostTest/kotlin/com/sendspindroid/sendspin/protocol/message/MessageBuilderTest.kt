@@ -381,6 +381,67 @@ class MessageBuilderTest {
         assertTrue(formats.all { it.bitDepth == 16 })
     }
 
+    @Test
+    fun buildSupportedFormats_defaultSampleRateIs48kOnly() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "flac",
+            isCodecSupported = { it in listOf("flac", "pcm") }
+        )
+        assertTrue(formats.all { it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE })
+    }
+
+    @Test
+    fun buildSupportedFormats_multiRateAdvertisedHighestFirstWithDepthsNested() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "pcm",
+            isCodecSupported = { it == "pcm" },
+            supportedBitDepths = listOf(16, 24),
+            supportedSampleRates = listOf(44100, 96000, 48000)
+        )
+        // Rate-major, depth-minor, both highest first.
+        assertEquals(
+            listOf(96000 to 24, 96000 to 16, 48000 to 24, 48000 to 16, 44100 to 24, 44100 to 16),
+            formats.map { it.sampleRate to it.bitDepth }
+        )
+    }
+
+    @Test
+    fun buildSupportedFormats_flacGetsEveryRateAt16Bit() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "flac",
+            isCodecSupported = { it in listOf("flac", "pcm") },
+            supportedSampleRates = listOf(96000, 48000)
+        )
+        val flac = formats.filter { it.codec == "flac" }
+        assertEquals(listOf(96000, 48000), flac.map { it.sampleRate })
+        assertTrue(flac.all { it.bitDepth == 16 })
+    }
+
+    @Test
+    fun buildSupportedFormats_opusStaysAt48kWhateverRatesAreOffered() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "opus",
+            isCodecSupported = { it in listOf("opus", "pcm") },
+            supportedSampleRates = listOf(96000, 48000)
+        )
+        val opus = formats.filter { it.codec == "opus" }
+        assertEquals(1, opus.size)
+        assertEquals(SendSpinProtocol.AudioFormat.SAMPLE_RATE, opus.single().sampleRate)
+        // PCM still gets both rates.
+        assertEquals(listOf(96000, 48000), formats.filter { it.codec == "pcm" }.map { it.sampleRate })
+    }
+
+    @Test
+    fun buildSupportedFormats_emptyRateListFallsBackToDefault() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "pcm",
+            isCodecSupported = { it == "pcm" },
+            supportedSampleRates = emptyList()
+        )
+        assertEquals(1, formats.size)
+        assertEquals(SendSpinProtocol.AudioFormat.SAMPLE_RATE, formats.single().sampleRate)
+    }
+
     // --- calculateBufferCapacity ---
 
     @Test

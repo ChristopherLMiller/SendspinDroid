@@ -80,6 +80,20 @@ object SendSpinProtocol {
      */
     object AudioFormat {
         const val SAMPLE_RATE = 48000
+
+        /**
+         * Sample rates offered to the server for PCM and FLAC, in Hz. The
+         * server picks the first entry in the advertised list it can serve,
+         * so the highest rate here wins whenever the server and the device's
+         * audio output both support it. [SAMPLE_RATE] stays in the list as the
+         * fallback every server can serve. Opus is always advertised at
+         * [SAMPLE_RATE] only, as it is a 48 kHz codec.
+         *
+         * Edit this list to try other rates. Every extra high rate raises the
+         * memory the receive buffer is sized for (see calculateBufferCapacity).
+         */
+        val SUPPORTED_SAMPLE_RATES: List<Int> = listOf(96000, 88200, 48000, 44100)
+
         const val CHANNELS = 2
         const val BIT_DEPTH = 16
         const val DEFAULT_CODEC = "pcm"

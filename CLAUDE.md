@@ -63,7 +63,7 @@ Bytes 13+:   Encoded audio frame
 ```
 
 ### Audio Format
-- 48kHz sample rate
+- 48kHz default sample rate; PCM and FLAC also advertise the higher rates in `SendSpinProtocol.AudioFormat.SUPPORTED_SAMPLE_RATES` (Opus stays at 48kHz)
 - 16-bit, 24-bit, or 32-bit signed PCM (negotiated via client hello)
 - Stereo (2 channels): only stereo is advertised, as a change of channel count
   needs a new AudioTrack and so cannot be gapless

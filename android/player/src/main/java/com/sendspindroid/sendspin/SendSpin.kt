@@ -810,10 +810,19 @@ class SendSpin(
         } else {
             AudioDecoderFactory.getSupportedPcmBitDepths()
         }
+        // Low-memory mode stays at the single default rate: the receive buffer
+        // is sized from the highest PCM entry advertised, and high rates cost
+        // proportionally more memory.
+        val sampleRates = if (isLowMemoryMode()) {
+            listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE)
+        } else {
+            SendSpinProtocol.AudioFormat.SUPPORTED_SAMPLE_RATES
+        }
         return MessageBuilder.buildSupportedFormats(
             preferredCodec = host.preferredCodec(),
             isCodecSupported = { AudioDecoderFactory.isCodecSupported(it) },
-            supportedBitDepths = bitDepths
+            supportedBitDepths = bitDepths,
+            supportedSampleRates = sampleRates
         )
     }
 

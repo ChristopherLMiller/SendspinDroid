@@ -439,11 +439,18 @@ object MessageBuilder {
      * Compressed codecs (FLAC, Opus) are always advertised at 16-bit. PCM is
      * advertised at every entry in [supportedBitDepths], highest first (so the
      * server picks the best-quality match).
+     *
+     * PCM and FLAC are advertised at every entry in [supportedSampleRates],
+     * highest first, with the bit depths nested inside each rate. Opus is a
+     * 48 kHz codec and is only ever advertised at
+     * [SendSpinProtocol.AudioFormat.SAMPLE_RATE]. An empty
+     * [supportedSampleRates] falls back to that same single rate.
      */
     fun buildSupportedFormats(
         preferredCodec: String,
         isCodecSupported: (String) -> Boolean,
-        supportedBitDepths: List<Int> = listOf(SendSpinProtocol.AudioFormat.BIT_DEPTH)
+        supportedBitDepths: List<Int> = listOf(SendSpinProtocol.AudioFormat.BIT_DEPTH),
+        supportedSampleRates: List<Int> = listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE)
     ): List<FormatEntry> {
         val codecOrder = mutableListOf<String>()
 
@@ -464,19 +471,30 @@ object MessageBuilder {
                 } else {
                     listOf(SendSpinProtocol.AudioFormat.BIT_DEPTH)
                 }
-                for (bitDepth in depths) {
-                    // Stereo only. A change of channel count needs a new
-                    // AudioTrack, so it cannot be made without a gap: "A
-                    // player that cannot switch its output between the
-                    // formats it lists without a gap SHOULD list a single
-                    // sample_rate and channels" (roles/player/v1.md). The
-                    // server mixes a mono source up for us.
-                    add(FormatEntry(
-                        codec = codec,
-                        sampleRate = SendSpinProtocol.AudioFormat.SAMPLE_RATE,
-                        channels = SendSpinProtocol.AudioFormat.CHANNELS,
-                        bitDepth = bitDepth
-                    ))
+                // Opus is a 48 kHz codec, so it never leaves the default rate.
+                val rates = if (codec == "opus") {
+                    listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE)
+                } else {
+                    supportedSampleRates
+                        .ifEmpty { listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE) }
+                        .distinct()
+                        .sortedDescending()
+                }
+                for (sampleRate in rates) {
+                    for (bitDepth in depths) {
+                        // Stereo only. A change of channel count needs a new
+                        // AudioTrack, so it cannot be made without a gap: "A
+                        // player that cannot switch its output between the
+                        // formats it lists without a gap SHOULD list a single
+                        // sample_rate and channels" (roles/player/v1.md). The
+                        // server mixes a mono source up for us.
+                        add(FormatEntry(
+                            codec = codec,
+                            sampleRate = sampleRate,
+                            channels = SendSpinProtocol.AudioFormat.CHANNELS,
+                            bitDepth = bitDepth
+                        ))
+                    }
                 }
             }
         }
