@@ -80,6 +80,24 @@ object SendSpinProtocol {
      */
     object AudioFormat {
         const val SAMPLE_RATE = 48000
+
+        /**
+         * Candidate sample rates for PCM and FLAC, in Hz, up to 768 kHz. This
+         * is what the player is willing to try, not what it advertises: the
+         * Android player probes the device's audio output (and, for FLAC, its
+         * decoder) and offers the server only the rates that probe accepts.
+         * The server picks the first entry in the advertised list it can
+         * serve, so the highest accepted rate wins. [SAMPLE_RATE] is never
+         * filtered out and stays as the fallback every server can serve. Opus
+         * is always advertised at [SAMPLE_RATE] only, as it is a 48 kHz codec.
+         *
+         * Buffers are capped in bytes (see [Buffer]), so a very high rate
+         * holds fewer seconds of audio rather than more memory.
+         */
+        val SUPPORTED_SAMPLE_RATES: List<Int> = listOf(
+            768000, 705600, 384000, 352800, 192000, 176400, 96000, 88200, 48000, 44100
+        )
+
         const val CHANNELS = 2
         const val BIT_DEPTH = 16
         const val DEFAULT_CODEC = "pcm"
@@ -123,6 +141,21 @@ object SendSpinProtocol {
     object Buffer {
         const val DURATION_NORMAL_SEC = 35    // 30s target + 5s sync headroom
         const val DURATION_LOW_MEM_SEC = 10
+
+        /**
+         * Ceiling on the `buffer_capacity` advertised to the server, in wire
+         * bytes. At 48 kHz / 32-bit stereo the duration targets above come to
+         * 13 MB and never reach it; at 768 kHz / 32-bit stereo they would be
+         * 215 MB, so there the buffer holds about 8 s instead.
+         */
+        const val MAX_CAPACITY_BYTES = 48 * 1024 * 1024
+
+        /**
+         * Ceiling on the decoded PCM queue, in bytes. Twice
+         * [MAX_CAPACITY_BYTES], as the duration cap is twice the capacity
+         * duration (compressed audio decodes larger than it travels).
+         */
+        const val MAX_DECODED_QUEUE_BYTES = 96L * 1024 * 1024
     }
 
     /**

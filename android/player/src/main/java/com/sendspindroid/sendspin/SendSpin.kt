@@ -810,10 +810,30 @@ class SendSpin(
         } else {
             AudioDecoderFactory.getSupportedPcmBitDepths()
         }
+        // Low-memory mode stays at the single default rate: the receive buffer
+        // is sized from the highest PCM entry advertised, and high rates cost
+        // proportionally more memory.
+        val sampleRates = if (isLowMemoryMode()) {
+            listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE)
+        } else {
+            SendSpinProtocol.AudioFormat.SUPPORTED_SAMPLE_RATES
+        }
         return MessageBuilder.buildSupportedFormats(
             preferredCodec = host.preferredCodec(),
             isCodecSupported = { AudioDecoderFactory.isCodecSupported(it) },
-            supportedBitDepths = bitDepths
+            supportedBitDepths = bitDepths,
+            supportedSampleRates = sampleRates,
+            // Only rates this device's output (and, for FLAC, its decoder)
+            // really takes are offered. A compressed codec decodes to 16-bit
+            // PCM, so its output is probed at 16-bit.
+            isFormatSupported = { codec, rate, depth ->
+                when (codec) {
+                    "pcm" -> AudioDecoderFactory.isPcmOutputSupported(rate, depth)
+                    "flac" -> AudioDecoderFactory.isCodecSupportedAtSampleRate(codec, rate) &&
+                        AudioDecoderFactory.isPcmOutputSupported(rate, 16)
+                    else -> false
+                }
+            }
         )
     }
 

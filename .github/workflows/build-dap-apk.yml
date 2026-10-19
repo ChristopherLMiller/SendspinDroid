@@ -1,0 +1,148 @@
+name: Build DAP APK
+
+# Builds an installable APK on every push to main and publishes it as the
+# "dap-latest" pre-release, so it can be downloaded straight onto a device.
+#
+# Signing:
+#   - With the repository secrets KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS
+#     and KEY_PASSWORD set, it builds the minified release APK signed with that
+#     key. The signature never changes, so each build installs over the last.
+#   - Without them it builds the debug APK, which the Android Gradle Plugin
+#     signs with a debug key. That key is cached between runs, but a cache
+#     evicted after sitting idle gives the next build a new key, and Android
+#     then refuses to install it over the old one until the old one is removed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-dap-apk.yml'
+  workflow_dispatch:
+
+# One build at a time; a newer push cancels an older build still running.
+concurrency:
+  group: build-dap-apk
+  cancel-in-progress: true
+
+permissions:
+  contents: write  # Needed to create the dap-latest release and its tag
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        # The runner image already ships the SDK; the action's default package
+        # list includes 'tools', which the image's sdkmanager no longer knows.
+        with:
+          packages: ''
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle.kts') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      # Only used by the debug build. Keeps its signing key the same between runs.
+      - name: Cache debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: debug-keystore-v1
+
+      - name: Make Gradlew executable
+        run: chmod +x ./gradlew
+
+      # Minutes since the epoch: always rising, and above the versionCode of any
+      # earlier build or release, so Android accepts each one as an update.
+      - name: Work out the version
+        id: version
+        run: |
+          echo "code=$(( $(date +%s) / 60 ))" >> "$GITHUB_OUTPUT"
+          echo "name=dap-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Changes this CI checkout only; nothing is committed back.
+      - name: Stamp the version into Gradle
+        run: |
+          sed -i "s/versionCode = [0-9]*/versionCode = ${{ steps.version.outputs.code }}/" app/build.gradle.kts
+          sed -i "s/versionName = \"[^\"]*\"/versionName = \"${{ steps.version.outputs.name }}\"/" app/build.gradle.kts
+
+      - name: Check for signing secrets
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.release == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          ./gradlew :app:assembleRelease \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/release.keystore" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/SendSpinDroid-dap.apk"
+
+      - name: Build debug APK
+        if: steps.signing.outputs.release != 'true'
+        run: |
+          ./gradlew :app:assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$RUNNER_TEMP/SendSpinDroid-dap.apk"
+
+      # An unsigned APK will not install, so fail here rather than publish one.
+      - name: Check the APK signature
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "$RUNNER_TEMP/SendSpinDroid-dap.apk"
+          else
+            echo "apksigner not found, signature check skipped"
+          fi
+
+      - name: Publish the APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SIGNING: ${{ steps.signing.outputs.release == 'true' && 'release key from repository secrets' || 'debug key (no signing secrets set)' }}
+        run: |
+          {
+            echo "Build of commit ${GITHUB_SHA}"
+            echo ""
+            echo "- Version code: ${{ steps.version.outputs.code }}"
+            echo "- Signed with: ${SIGNING}"
+            echo ""
+            echo "Latest commit: $(git log -1 --format=%s)"
+          } > "$RUNNER_TEMP/notes.md"
+          gh release delete dap-latest --cleanup-tag --yes || true
+          gh release create dap-latest "$RUNNER_TEMP/SendSpinDroid-dap.apk" \
+            --target "$GITHUB_SHA" \
+            --title "DAP build ${{ steps.version.outputs.name }}" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --prerelease

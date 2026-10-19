@@ -673,11 +673,17 @@ class SendSpinEngine(
         // DURATION_NORMAL_SEC at the highest PCM byte rate advertised, so
         // twice it holds 16-bit PCM. Uncapped, an Opus backlog filling it
         // would decode to 13-17 minutes (150-200 MB). Low memory mode: ~10 s.
-        val maxSamples = sampleRate.toLong() * if (lowMemoryMode()) {
+        val maxSamplesByDuration = sampleRate.toLong() * if (lowMemoryMode()) {
             SendSpinProtocol.Buffer.DURATION_LOW_MEM_SEC
         } else {
             2 * SendSpinProtocol.Buffer.DURATION_NORMAL_SEC
         }
+        // A very high rate or bit depth would make that many seconds hundreds
+        // of megabytes (768 kHz / 32-bit stereo: about 430 MB), so the queue is
+        // also capped in bytes and holds fewer seconds instead.
+        val bytesPerFrame = (channels * (bitDepth / 8)).coerceAtLeast(1).toLong()
+        val maxSamplesByBytes = SendSpinProtocol.Buffer.MAX_DECODED_QUEUE_BYTES / bytesPerFrame
+        val maxSamples = minOf(maxSamplesByDuration, maxSamplesByBytes)
         val created = newPlayer(timeFilter, sampleRate, channels, bitDepth, maxSamples)
         created.apply {
             setStateCallback(object : SyncAudioPlayerCallback {

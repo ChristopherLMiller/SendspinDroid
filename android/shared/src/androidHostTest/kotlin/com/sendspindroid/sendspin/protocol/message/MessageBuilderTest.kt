@@ -381,6 +381,127 @@ class MessageBuilderTest {
         assertTrue(formats.all { it.bitDepth == 16 })
     }
 
+    @Test
+    fun buildSupportedFormats_defaultSampleRateIs48kOnly() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "flac",
+            isCodecSupported = { it in listOf("flac", "pcm") }
+        )
+        assertTrue(formats.all { it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE })
+    }
+
+    @Test
+    fun buildSupportedFormats_multiRateAdvertisedHighestFirstWithDepthsNested() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "pcm",
+            isCodecSupported = { it == "pcm" },
+            supportedBitDepths = listOf(16, 24),
+            supportedSampleRates = listOf(44100, 96000, 48000)
+        )
+        // Rate-major, depth-minor, both highest first.
+        assertEquals(
+            listOf(96000 to 24, 96000 to 16, 48000 to 24, 48000 to 16, 44100 to 24, 44100 to 16),
+            formats.map { it.sampleRate to it.bitDepth }
+        )
+    }
+
+    @Test
+    fun buildSupportedFormats_flacGetsEveryRateAt16Bit() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "flac",
+            isCodecSupported = { it in listOf("flac", "pcm") },
+            supportedSampleRates = listOf(96000, 48000)
+        )
+        val flac = formats.filter { it.codec == "flac" }
+        assertEquals(listOf(96000, 48000), flac.map { it.sampleRate })
+        assertTrue(flac.all { it.bitDepth == 16 })
+    }
+
+    @Test
+    fun buildSupportedFormats_opusStaysAt48kWhateverRatesAreOffered() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "opus",
+            isCodecSupported = { it in listOf("opus", "pcm") },
+            supportedSampleRates = listOf(96000, 48000)
+        )
+        val opus = formats.filter { it.codec == "opus" }
+        assertEquals(1, opus.size)
+        assertEquals(SendSpinProtocol.AudioFormat.SAMPLE_RATE, opus.single().sampleRate)
+        // PCM still gets both rates.
+        assertEquals(listOf(96000, 48000), formats.filter { it.codec == "pcm" }.map { it.sampleRate })
+    }
+
+    @Test
+    fun buildSupportedFormats_emptyRateListFallsBackToDefault() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "pcm",
+            isCodecSupported = { it == "pcm" },
+            supportedSampleRates = emptyList()
+        )
+        assertEquals(1, formats.size)
+        assertEquals(SendSpinProtocol.AudioFormat.SAMPLE_RATE, formats.single().sampleRate)
+    }
+
+    @Test
+    fun buildSupportedFormats_deviceVetoDropsRejectedCombinationsOnly() {
+        // A device that opens everything up to 192 kHz, and 32-bit only up to 96 kHz.
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "pcm",
+            isCodecSupported = { it == "pcm" },
+            supportedBitDepths = listOf(16, 32),
+            supportedSampleRates = listOf(768000, 192000, 96000, 48000),
+            isFormatSupported = { _, rate, depth ->
+                rate <= 192000 && (depth == 16 || rate <= 96000)
+            }
+        )
+        assertEquals(
+            listOf(192000 to 16, 96000 to 32, 96000 to 16, 48000 to 32, 48000 to 16),
+            formats.map { it.sampleRate to it.bitDepth }
+        )
+    }
+
+    @Test
+    fun buildSupportedFormats_defaultRateIsNeverPutToTheDeviceVeto() {
+        // Even a veto that rejects everything leaves the 48 kHz fallback, so a
+        // connection can still be made.
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "flac",
+            isCodecSupported = { it in listOf("flac", "pcm") },
+            supportedSampleRates = listOf(768000, 48000),
+            isFormatSupported = { _, _, _ -> false }
+        )
+        assertEquals(listOf("flac" to 48000, "pcm" to 48000), formats.map { it.codec to it.sampleRate })
+    }
+
+    @Test
+    fun buildSupportedFormats_flacVetoedByDecoderKeepsPcmAtThatRate() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "flac",
+            isCodecSupported = { it in listOf("flac", "pcm") },
+            supportedSampleRates = listOf(768000, 48000),
+            isFormatSupported = { codec, _, _ -> codec == "pcm" }
+        )
+        assertEquals(
+            listOf("flac" to 48000, "pcm" to 768000, "pcm" to 48000),
+            formats.map { it.codec to it.sampleRate }
+        )
+    }
+
+    @Test
+    fun buildSupportedFormats_candidateListReachesTop768kHz32Bit() {
+        val formats = MessageBuilder.buildSupportedFormats(
+            preferredCodec = "pcm",
+            isCodecSupported = { it == "pcm" },
+            supportedBitDepths = listOf(16, 24, 32),
+            supportedSampleRates = SendSpinProtocol.AudioFormat.SUPPORTED_SAMPLE_RATES
+        )
+        val first = formats.first()
+        assertEquals(768000, first.sampleRate)
+        assertEquals(32, first.bitDepth)
+        assertEquals(2, first.channels)
+        assertTrue(formats.any { it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE })
+    }
+
     // --- calculateBufferCapacity ---
 
     @Test
@@ -413,6 +534,23 @@ class MessageBuilderTest {
         )
         // 10 * 48000 * 2 * 2 = 1,920,000
         assertEquals(1_920_000, MessageBuilder.calculateBufferCapacity(formats, 10))
+    }
+
+    @Test
+    fun calculateBufferCapacity_768kHz32bitIsCappedInBytes() {
+        val formats = listOf(MessageBuilder.FormatEntry("pcm", 768000, 2, 32))
+        // 35 * 768000 * 2 * 4 = 215,040,000 uncapped
+        assertEquals(
+            SendSpinProtocol.Buffer.MAX_CAPACITY_BYTES,
+            MessageBuilder.calculateBufferCapacity(formats, 35)
+        )
+    }
+
+    @Test
+    fun calculateBufferCapacity_96kHz32bitStaysUnderTheCap() {
+        val formats = listOf(MessageBuilder.FormatEntry("pcm", 96000, 2, 32))
+        // 35 * 96000 * 2 * 4 = 26,880,000
+        assertEquals(26_880_000, MessageBuilder.calculateBufferCapacity(formats, 35))
     }
 
     @Test
