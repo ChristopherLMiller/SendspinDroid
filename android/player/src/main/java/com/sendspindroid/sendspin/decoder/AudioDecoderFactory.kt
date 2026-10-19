@@ -1,5 +1,6 @@
 package com.sendspindroid.sendspin.decoder
 
+import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
@@ -7,6 +8,7 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.util.Log
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Factory for creating audio decoders based on codec type.
@@ -97,6 +99,99 @@ object AudioDecoderFactory {
         }
 
         return depths.sorted()
+    }
+
+    // A probe opens real audio tracks and decoder lookups, so each answer is
+    // kept: the first connection pays for it, later ones read the map.
+    private val pcmOutputProbeCache = ConcurrentHashMap<Pair<Int, Int>, Boolean>()
+    private val codecRateProbeCache = ConcurrentHashMap<Pair<String, Int>, Boolean>()
+
+    /**
+     * Whether this device's audio output accepts stereo PCM at [sampleRate] and
+     * [bitDepth], found by opening an [AudioTrack] the way playback does.
+     *
+     * The platform's documented sample-rate ceiling and what a given device and
+     * output route accept do not always agree, so this asks the device rather
+     * than a table. A track that opens only proves the platform took the
+     * format: it may still resample to the output's native rate. Whether it
+     * does not is logged where the platform can say (API 29+).
+     *
+     * 24-bit and 32-bit PCM need API 31+, as everywhere else in the player.
+     */
+    fun isPcmOutputSupported(sampleRate: Int, bitDepth: Int): Boolean =
+        pcmOutputProbeCache.getOrPut(sampleRate to bitDepth) { probePcmOutput(sampleRate, bitDepth) }
+
+    private fun probePcmOutput(sampleRate: Int, bitDepth: Int): Boolean {
+        val encoding = when (bitDepth) {
+            16 -> AudioFormat.ENCODING_PCM_16BIT
+            24 -> if (Build.VERSION.SDK_INT >= 31) AudioFormat.ENCODING_PCM_24BIT_PACKED else return false
+            32 -> if (Build.VERSION.SDK_INT >= 31) AudioFormat.ENCODING_PCM_32BIT else return false
+            else -> return false
+        }
+        return try {
+            val minBuf = AudioTrack.getMinBufferSize(
+                sampleRate, AudioFormat.CHANNEL_OUT_STEREO, encoding
+            )
+            if (minBuf <= 0) {
+                Log.d(TAG, "PCM output ${sampleRate}Hz/${bitDepth}bit rejected: min buffer size $minBuf")
+                return false
+            }
+            val format = AudioFormat.Builder()
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                .setEncoding(encoding)
+                .build()
+            val attributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(attributes)
+                .setAudioFormat(format)
+                .setBufferSizeInBytes(minBuf)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+            val opened = track.state == AudioTrack.STATE_INITIALIZED
+            track.release()
+            if (opened) {
+                val direct = if (Build.VERSION.SDK_INT >= 29) {
+                    AudioTrack.isDirectPlaybackSupported(format, attributes).toString()
+                } else {
+                    "unknown"
+                }
+                Log.i(TAG, "PCM output ${sampleRate}Hz/${bitDepth}bit accepted (direct playback: $direct)")
+            } else {
+                Log.d(TAG, "PCM output ${sampleRate}Hz/${bitDepth}bit rejected: track did not initialize")
+            }
+            opened
+        } catch (e: Exception) {
+            Log.d(TAG, "PCM output ${sampleRate}Hz/${bitDepth}bit rejected: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Whether this device has a decoder for [codec] that takes [sampleRate],
+     * asked of the platform's codec list. PCM needs no decoder and is always
+     * true here; whether its rate can be played is [isPcmOutputSupported].
+     */
+    fun isCodecSupportedAtSampleRate(codec: String, sampleRate: Int): Boolean {
+        val mime = when (codec.lowercase()) {
+            "flac" -> MediaFormat.MIMETYPE_AUDIO_FLAC
+            "opus" -> MediaFormat.MIMETYPE_AUDIO_OPUS
+            else -> return codec.equals("pcm", ignoreCase = true)
+        }
+        return codecRateProbeCache.getOrPut(mime to sampleRate) {
+            try {
+                val format = MediaFormat.createAudioFormat(mime, sampleRate, 2)
+                val found = MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) != null
+                if (!found) Log.d(TAG, "No $mime decoder takes ${sampleRate}Hz")
+                found
+            } catch (e: Exception) {
+                Log.d(TAG, "$mime decoder lookup at ${sampleRate}Hz failed: ${e.message}")
+                false
+            }
+        }
     }
 
     private fun isMediaCodecSupported(mimeType: String): Boolean {

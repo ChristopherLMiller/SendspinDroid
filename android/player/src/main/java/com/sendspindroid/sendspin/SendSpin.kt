@@ -822,7 +822,18 @@ class SendSpin(
             preferredCodec = host.preferredCodec(),
             isCodecSupported = { AudioDecoderFactory.isCodecSupported(it) },
             supportedBitDepths = bitDepths,
-            supportedSampleRates = sampleRates
+            supportedSampleRates = sampleRates,
+            // Only rates this device's output (and, for FLAC, its decoder)
+            // really takes are offered. A compressed codec decodes to 16-bit
+            // PCM, so its output is probed at 16-bit.
+            isFormatSupported = { codec, rate, depth ->
+                when (codec) {
+                    "pcm" -> AudioDecoderFactory.isPcmOutputSupported(rate, depth)
+                    "flac" -> AudioDecoderFactory.isCodecSupportedAtSampleRate(codec, rate) &&
+                        AudioDecoderFactory.isPcmOutputSupported(rate, 16)
+                    else -> false
+                }
+            }
         )
     }
 
