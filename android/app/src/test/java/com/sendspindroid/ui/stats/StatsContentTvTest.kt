@@ -81,7 +81,8 @@ class StatsContentTvTest {
         val afterOneDown = scrollPosition()
         assertTrue("Down scrolls the stats", afterOneDown > 0f)
 
-        repeat(20) { stats.performKeyInput { pressKey(Key.DirectionDown) } }
+        // Enough presses to reach the bottom of the sheet, which grows as sections are added
+        repeat(60) { stats.performKeyInput { pressKey(Key.DirectionDown) } }
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithText(networkHeader).assertIsDisplayed()
         val atBottom = scrollPosition()
