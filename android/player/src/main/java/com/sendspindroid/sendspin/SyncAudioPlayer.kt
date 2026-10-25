@@ -2084,6 +2084,12 @@ class SyncAudioPlayer(
      */
     fun getPlaybackState(): PlaybackState = playbackState
 
+    /** Output-dry underruns since this player was created (see [getStats]). */
+    fun getBufferUnderrunCount(): Long = bufferUnderrunCount
+
+    /** Reanchors since this player was created. */
+    fun getReanchorCount(): Long = reanchorCount
+
     /**
      * Get current buffered duration in milliseconds.
      */

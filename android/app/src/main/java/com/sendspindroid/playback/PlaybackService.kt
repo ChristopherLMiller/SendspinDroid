@@ -3326,6 +3326,15 @@ class PlaybackService : MediaLibraryService() {
             bundle.putLong("overlaps_trimmed", audioStats.overlapsTrimmed)
             bundle.putLong("overlap_trimmed_ms", audioStats.overlapTrimmedMs)
 
+            // Link: how far ahead of playback the server is, against a full buffer
+            val link = engine.linkSnapshot()
+            bundle.putDouble("link_lead_s", link.leadSec ?: Double.NaN)
+            bundle.putDouble("link_reference_s", link.referenceSec ?: Double.NaN)
+            bundle.putDouble("link_fill", link.fill ?: Double.NaN)
+            bundle.putDouble("link_trend_s_per_s", link.trendSecPerSec ?: Double.NaN)
+            bundle.putDouble("link_bytes_per_audio_s", link.bytesPerAudioSec ?: Double.NaN)
+            bundle.putLong("link_decode_errors", engine.decodeErrorCount)
+
             // Sync correction
             bundle.putInt("insert_every_n_frames", audioStats.insertEveryNFrames)
             bundle.putInt("drop_every_n_frames", audioStats.dropEveryNFrames)

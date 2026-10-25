@@ -158,6 +158,14 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             reanchorCount = bundle.getLong("reanchor_count", 0L),
             bufferUnderrunCount = bundle.getLong("buffer_underrun_count", 0L),
 
+            // Link
+            linkLeadS = bundle.getDouble("link_lead_s", Double.NaN),
+            linkReferenceS = bundle.getDouble("link_reference_s", Double.NaN),
+            linkFill = bundle.getDouble("link_fill", Double.NaN),
+            linkTrendSPerS = bundle.getDouble("link_trend_s_per_s", Double.NaN),
+            linkBytesPerAudioS = bundle.getDouble("link_bytes_per_audio_s", Double.NaN),
+            linkDecodeErrors = bundle.getLong("link_decode_errors", 0L),
+
             // Buffer
             queuedSamples = bundle.getLong("queued_samples", 0L),
             chunksReceived = bundle.getLong("chunks_received", 0L),
@@ -246,6 +254,14 @@ data class StatsState(
     val gapSilenceMs: Long = 0L,
     val overlapsTrimmed: Long = 0L,
     val overlapTrimmedMs: Long = 0L,
+
+    // Link: how far ahead of playback the server is, against a full buffer
+    val linkLeadS: Double = Double.NaN,
+    val linkReferenceS: Double = Double.NaN,
+    val linkFill: Double = Double.NaN,
+    val linkTrendSPerS: Double = Double.NaN,
+    val linkBytesPerAudioS: Double = Double.NaN,
+    val linkDecodeErrors: Long = 0L,
 
     // Newline-delimited reconnect-episode summary from the recorder.
     val handoffEpisodes: String? = null,

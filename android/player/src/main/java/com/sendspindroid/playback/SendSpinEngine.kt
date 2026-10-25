@@ -11,7 +11,9 @@ import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import com.sendspindroid.sendspin.protocol.StreamConfig
 import com.sendspindroid.sendspin.SendspinTimeFilter
+import com.sendspindroid.sendspin.StreamLeadEstimator
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -110,6 +112,13 @@ class SendSpinEngine(
     private var trackGain = 1f
 
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
+
+    // How far ahead of playback the server has sent, against a full buffer.
+    // Diagnostics only (see StreamLeadEstimator). Chunks and the stats path
+    // both sample it; the estimator keeps one sample a second.
+    private val leadEstimator = StreamLeadEstimator()
+    private var lastLeadLogNs = 0L
+    private val decodeErrors = AtomicLong()
 
     /**
      * Tasks sent through [decodeChannel] to the single-owner decode worker.
@@ -225,6 +234,9 @@ class SendSpinEngine(
             Log.d(TAG, "stream/start repeats the active format - nothing to do")
             return
         }
+        // A new stream starts the lead again. A format change keeps it: the
+        // audio already held plays out in the old format.
+        if (action == StreamStartAction.NEW_STREAM) leadEstimator.reset(advertisedBufferCapacity())
         // A stream/start on an active stream reconfigures it: "Clients
         // MUST keep buffered chunks and decode each chunk in the format
         // that was in effect when it was received." FIFO ordering on
@@ -285,12 +297,65 @@ class SendSpinEngine(
         }
     }
 
+    /** The lead against a full buffer, for the stats sheet (see [StreamLeadEstimator]). */
+    fun linkSnapshot(): StreamLeadEstimator.Snapshot {
+        sampleLead()
+        return leadEstimator.snapshot()
+    }
+
+    /** Decode errors since this engine was created. */
+    val decodeErrorCount: Long
+        get() = decodeErrors.get()
+
+    private fun advertisedBufferCapacity(): Long = client?.advertisedBufferCapacity?.toLong() ?: 0L
+
+    /**
+     * Read the playback cursor into the lead. Called for each chunk on the
+     * socket thread and on the stats path; the estimator takes a sample a second.
+     */
+    private fun sampleLead() {
+        val p = player
+        val cursorUs = if (p != null && p.getPlaybackState() == SyncPlaybackState.PLAYING) {
+            p.getServerTimelineCursorUs()
+        } else {
+            0L
+        }
+        leadEstimator.onSample(System.nanoTime(), cursorUs)
+    }
+
+    /** Logs the link every ten seconds while chunks arrive. Socket thread only. */
+    private fun logLinkIfDue() {
+        val nowNs = System.nanoTime()
+        if (nowNs - lastLeadLogNs < LEAD_LOG_INTERVAL_NS) return
+        lastLeadLogNs = nowNs
+        val link = leadEstimator.snapshot()
+        val p = player
+        Log.i(
+            TAG,
+            "link lead=${fmt(link.leadSec, "%.2f")}s reference=${fmt(link.referenceSec, "%.1f")}s " +
+                "fill=${fmt(link.fill?.times(100), "%.0f")}% trend=${fmt(link.trendSecPerSec, "%+.3f")}s/s " +
+                "bytesPerAudioSec=${fmt(link.bytesPerAudioSec, "%.0f")} " +
+                "queue=${fmt(p?.getBufferedDurationMs()?.div(1000.0), "%.2f")}s " +
+                "dry=${p?.getBufferUnderrunCount()} reanchors=${p?.getReanchorCount()} " +
+                "decodeErrors=${decodeErrors.get()}"
+        )
+    }
+
+    private fun fmt(value: Double?, pattern: String): String =
+        if (value == null) "--" else String.format(pattern, value)
+
     fun onAudioChunk(serverTimeMicros: Long, audioData: ByteArray) {
         // Fast-path gate: once onStreamStart has been observed but before
         // any audio has been accepted, decoderReady stays false so we
         // don't pile chunks into the channel for a decoder that will
         // never exist. Normal steady state sees decoderReady = true.
         if (!decoderReady) return
+
+        // The lead counts what the server has sent, header included. Chunks
+        // refused by the gate above were never accepted, so they are not counted.
+        leadEstimator.onChunk(serverTimeMicros, (audioData.size + SendSpinProtocol.AUDIO_HEADER_SIZE_BYTES).toLong())
+        sampleLead()
+        logLinkIfDue()
 
         // Hand the chunk to the single-owner decode worker via the
         // channel. Wrapping send() in launch lets this callback return
@@ -322,6 +387,7 @@ class SendSpinEngine(
         // chunks received after this message": the bump discards chunks
         // still waiting to be decoded, which can be seconds of audio while
         // the worker is holding a format switch back.
+        leadEstimator.reset(advertisedBufferCapacity())
         decodeGeneration++
         scope.launch { decodeChannel.send(DecodeTask.Flush) }
 
@@ -340,6 +406,7 @@ class SendSpinEngine(
         decodeGeneration++
         streamEpoch.incrementAndGet()
         activeStream = null
+        leadEstimator.reset(advertisedBufferCapacity())
 
         scope.launch {
             Log.i(TAG, "[cmd-trace] T3 onStreamEnd.post ts=${System.nanoTime() / 1_000_000} thread=${Thread.currentThread().name}")
@@ -521,6 +588,7 @@ class SendSpinEngine(
         val decoded = try {
             decoder.decode(t.audioData, t.serverTimeMicros)
         } catch (e: Exception) {
+            decodeErrors.incrementAndGet()
             Log.e(TAG, "Decode error, dropping chunk", e)
             // A codec that has failed can stay in its error state, decoding
             // nothing for the rest of the stream; a flush does not leave it
@@ -723,5 +791,8 @@ class SendSpinEngine(
 
         // At most this often, a fresh decoder after a decode error
         const val DECODER_SET_UP_AGAIN_INTERVAL_NS = 1_000_000_000L
+
+        // The link is logged this often while chunks arrive
+        const val LEAD_LOG_INTERVAL_NS = 10_000_000_000L
     }
 }

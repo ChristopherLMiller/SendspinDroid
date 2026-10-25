@@ -266,6 +266,30 @@ fun StatsContent(
 
         SectionDivider()
 
+        // === LINK: how far ahead of playback the server is, against a full buffer ===
+        SectionHeader(stringResource(R.string.stats_section_link))
+        StatRow(stringResource(R.string.stats_link_lead), linkValue(state.linkLeadS, "%.1f s"))
+        StatRow(stringResource(R.string.stats_link_reference), linkValue(state.linkReferenceS, "%.1f s"))
+        StatRow(
+            stringResource(R.string.stats_link_fill),
+            linkValue(state.linkFill * 100, "%.0f%%"),
+            if (state.linkFill.isNaN()) null else when {
+                state.linkFill >= 0.9 -> ColorGood
+                state.linkFill >= 0.5 -> ColorWarning
+                else -> ColorBad
+            },
+        )
+        StatRow(stringResource(R.string.stats_link_trend), linkValue(state.linkTrendSPerS, "%+.2f s/s"))
+        StatRow(stringResource(R.string.stats_link_rate), linkValue(state.linkBytesPerAudioS / 1000, "%.1f kB/s"))
+        StatRow(
+            stringResource(R.string.stats_link_decode_errors),
+            state.linkDecodeErrors.toString(),
+            if (state.linkDecodeErrors > 0) ColorBad else null,
+        )
+        SectionNote(stringResource(R.string.stats_link_note))
+
+        SectionDivider()
+
         // === PROTOCOL: what was negotiated with the server ===
         SectionHeader(stringResource(R.string.stats_section_protocol))
         StatRow(stringResource(R.string.stats_server), state.serverName ?: "--")
@@ -420,6 +444,10 @@ private fun yesNo(value: Boolean): String =
     stringResource(if (value) R.string.action_yes else R.string.action_no)
 
 private fun agoSeconds(ageMs: Long): String = String.format("%.1f s ago", ageMs / 1000.0)
+
+/** A link reading, or "--" until it has been measured. */
+private fun linkValue(value: Double, pattern: String): String =
+    if (value.isNaN()) "--" else String.format(pattern, value)
 
 /** A frame count with the stretch of audio it amounts to. */
 private fun framesAndMs(frames: Long, state: StatsState): String =

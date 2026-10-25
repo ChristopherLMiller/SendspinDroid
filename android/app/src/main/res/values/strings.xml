@@ -99,6 +99,14 @@
     <!-- Stats sections -->
     <string name="stats_section_network">NETWORK</string>
     <string name="stats_section_buffer">BUFFER</string>
+    <string name="stats_section_link">LINK</string>
+    <string name="stats_link_lead">Lead ahead of playback</string>
+    <string name="stats_link_reference">Lead when the buffer is full</string>
+    <string name="stats_link_fill">Fill</string>
+    <string name="stats_link_trend">Trend</string>
+    <string name="stats_link_rate">Audio data rate</string>
+    <string name="stats_link_decode_errors">Decode errors</string>
+    <string name="stats_link_note">Diagnostic only, nothing acts on it yet. Fill near 100% is the usual lead. Fill that keeps falling means the link is not keeping up.</string>
 
     <!-- Stats labels - Sync Status -->
 

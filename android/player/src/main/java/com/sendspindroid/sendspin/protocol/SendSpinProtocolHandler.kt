@@ -288,6 +288,11 @@ abstract class SendSpinProtocolHandler(
     @Volatile
     private var preferredFormat: MessageBuilder.FormatEntry? = null
 
+    /** The buffer_capacity in the last client/hello, in wire bytes; 0 before one is sent. */
+    @Volatile
+    var advertisedBufferCapacity: Int = 0
+        private set
+
     /**
      * Send client/hello, the reply to server/hello.
      *
@@ -305,6 +310,7 @@ abstract class SendSpinProtocolHandler(
             SendSpinProtocol.Buffer.DURATION_NORMAL_SEC
         }
         val bufferCapacity = MessageBuilder.calculateBufferCapacity(formats, bufferDuration)
+        advertisedBufferCapacity = bufferCapacity
         val text = MessageBuilder.buildClientHello(
             deviceName = getDeviceName(),
             bufferCapacity = bufferCapacity,
@@ -884,6 +890,7 @@ abstract class SendSpinProtocolHandler(
         activities = emptySet()
         advertisedFormats = emptyList()
         preferredFormat = null
+        advertisedBufferCapacity = 0
 
         _streamActive = false
         _currentStreamConfig = null
