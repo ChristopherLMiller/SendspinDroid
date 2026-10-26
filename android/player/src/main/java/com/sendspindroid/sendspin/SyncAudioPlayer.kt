@@ -315,6 +315,10 @@ class SyncAudioPlayer(
     private val audioDispatcher: CoroutineDispatcher =
         Handler(audioThread.looper).asCoroutineDispatcher("SendSpinAudioDispatcher")
 
+    // Posts to the same Looper, so a track torn down through it runs on the
+    // playback thread, between the loop's steps (see release).
+    private val audioHandler: Handler = Handler(audioThread.looper)
+
     // Coroutine scope for playback - recreated for each playback session
     private var scope: CoroutineScope? = null
     private var playbackJob: Job? = null
@@ -722,7 +726,12 @@ class SyncAudioPlayer(
     }
 
     private fun applyGain() {
-        audioSink?.setVolume(if (muteReasons.isEmpty()) trackGain else 0f)
+        try {
+            audioSink?.setVolume(if (muteReasons.isEmpty()) trackGain else 0f)
+        } catch (e: IllegalStateException) {
+            // The track is being released: there is nothing left to set the gain on
+            PlayerLog.Audio.v("Gain not applied: the AudioTrack is being released")
+        }
     }
 
     /**
@@ -972,29 +981,57 @@ class SyncAudioPlayer(
         // Phase 2: Outside lock - cancel scope and wait for coroutine to finish
         awaitPlaybackLoopCancellation(captured)
 
-        // Quit the audio HandlerThread only after the playback coroutine has
-        // drained off its Looper. Quitting earlier would orphan pending
-        // messages and risk IllegalStateException on subsequent post().
-        audioThread.quitSafely()
-
-        // Phase 3: Re-acquire lock for final resource cleanup
-        stateLock.withLock {
-            // Release AudioTrack
-            try {
-                audioSink?.stop()
-            } catch (e: IllegalStateException) {
-                // AudioTrack may already be stopped
-                PlayerLog.Audio.v("AudioTrack already stopped during release")
-            }
-            audioSink?.release()
-            audioSink = null
-
+        // Phase 3: Re-acquire lock for the state cleanup, and take the track out
+        // of the player. The track is torn down on the playback thread, after
+        // the loop's current step has returned: a blocking write can outlast the
+        // wait above, and cancellation cannot interrupt it. Tearing the track
+        // down from here would pull it out from under the loop's next write.
+        val sink = stateLock.withLock {
             // Clear all buffers and state
             chunkQueue.clear()
             totalQueuedSamples.set(0)
             stateCallback = null
 
-            PlayerLog.Audio.i("Released")
+            audioSink.also { audioSink = null }
+        }
+        releaseOnPlaybackThread(sink)
+
+        // Quit the audio HandlerThread only after the track has been torn down
+        // and the playback coroutine has drained off its Looper. Quitting earlier
+        // would orphan pending messages and risk IllegalStateException on
+        // subsequent post().
+        audioThread.quitSafely()
+
+        PlayerLog.Audio.i("Released")
+    }
+
+    /**
+     * Stop and release [sink] on the playback thread, after the loop's step in
+     * hand. Waits a short while, as the loop cancel does. If the thread is still
+     * in a write, the teardown runs when that write returns.
+     */
+    private fun releaseOnPlaybackThread(sink: AudioSink?) {
+        if (sink == null) return
+        val done = CountDownLatch(1)
+        audioHandler.post {
+            try {
+                try {
+                    sink.stop()
+                } catch (e: IllegalStateException) {
+                    // AudioTrack may already be stopped
+                    PlayerLog.Audio.v("AudioTrack already stopped during release")
+                }
+                sink.release()
+            } finally {
+                done.countDown()
+            }
+        }
+        try {
+            if (!done.await(PLAYBACK_LOOP_CANCEL_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                PlayerLog.Audio.w("AudioTrack teardown is waiting for the playback thread")
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
@@ -1579,7 +1616,14 @@ class SyncAudioPlayer(
             PlayerLog.Audio.d("Playback loop started, initial state=$playbackState")
 
             while (isActive && isPlaying.get()) {
-                val waitMs = playbackLoopStep()
+                val waitMs = try {
+                    playbackLoopStep()
+                } catch (e: IllegalStateException) {
+                    // The AudioTrack has gone away under the loop. Stop the loop
+                    // rather than let the exception take the process down.
+                    PlayerLog.Audio.e("Playback loop stopped: the AudioTrack has gone", e)
+                    break
+                }
                 if (waitMs > 0) delay(waitMs)
             }
 
@@ -1887,10 +1931,10 @@ class SyncAudioPlayer(
                 }
             }
 
-            var written = track.write(pcmData, offset, size)
+            var written = writeTo(track, pcmData, offset, size)
             repeat(duplicates) {
                 if (written >= 0) {
-                    val dup = track.write(pcmData, offset + size - bytesPerFrame, bytesPerFrame)
+                    val dup = writeTo(track, pcmData, offset + size - bytesPerFrame, bytesPerFrame)
                     written = if (dup < 0) dup else written + dup
                 }
             }
@@ -1906,13 +1950,29 @@ class SyncAudioPlayer(
     }
 
     /**
+     * Write to [track], or return -1 when it has gone. A release on another
+     * thread can take the track away before a write that is still to come, and
+     * a write on a released track throws, so it is checked and caught here.
+     * Callers stop writing on a negative result.
+     */
+    private fun writeTo(track: AudioSink, buffer: ByteArray, offset: Int, size: Int): Int {
+        if (isReleased.get()) return -1
+        return try {
+            track.write(buffer, offset, size)
+        } catch (e: IllegalStateException) {
+            PlayerLog.Audio.w("AudioTrack went away during a write: ${e.message}")
+            -1
+        }
+    }
+
+    /**
      * Write [frames] frames of silence, keeping the frame accounting in step.
      * Stops early when a reset has been asked for: the track is flushed next.
      */
     private fun writeSilence(track: AudioSink, frames: Long) {
         var remaining = frames * bytesPerFrame
         while (remaining > 0 && !resetRequested) {
-            val written = track.write(silenceBuffer, 0, minOf(remaining, silenceBuffer.size.toLong()).toInt())
+            val written = writeTo(track, silenceBuffer, 0, minOf(remaining, silenceBuffer.size.toLong()).toInt())
             if (written <= 0) return
             totalFramesWritten.addAndGet((written / bytesPerFrame).toLong())
             remaining -= written
