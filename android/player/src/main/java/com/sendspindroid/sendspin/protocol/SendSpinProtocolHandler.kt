@@ -294,13 +294,29 @@ abstract class SendSpinProtocolHandler(
         private set
 
     /**
+     * The default format, 48 kHz 16-bit, leads each codec's entries. A server
+     * that takes the first entry it can produce then streams at the default,
+     * not at the highest rate and depth the device accepts. Codecs keep their
+     * order, so the preferred one still comes first.
+     */
+    private fun defaultFirst(formats: List<MessageBuilder.FormatEntry>): List<MessageBuilder.FormatEntry> =
+        formats.map { it.codec }.distinct().flatMap { codec ->
+            val entries = formats.filter { it.codec == codec }
+            val (leading, rest) = entries.partition {
+                it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE &&
+                    it.bitDepth == SendSpinProtocol.AudioFormat.BIT_DEPTH
+            }
+            leading + rest
+        }
+
+    /**
      * Send client/hello, the reply to server/hello.
      *
      * Buffer capacity is computed from the format list and target duration
      * so the wire-byte cap scales with the highest PCM bitrate we advertise.
      */
     private fun sendClientHello() {
-        val formats = getSupportedFormats()
+        val formats = defaultFirst(getSupportedFormats())
         advertisedFormats = formats
         // The hello's priority order already puts the preferred codec first.
         preferredFormat = null
