@@ -34,7 +34,9 @@ import androidx.compose.ui.unit.sp
 import com.sendspindroid.R
 import com.sendspindroid.ui.adaptive.AdaptiveDefaults
 import com.sendspindroid.ui.adaptive.FormFactor
+import com.sendspindroid.sendspin.protocol.StreamFormat
 import com.sendspindroid.ui.main.components.AlbumArtCard
+import com.sendspindroid.ui.main.components.GroupAndFormatLine
 import com.sendspindroid.ui.main.components.TvTrackProgressBar
 
 /**
@@ -49,6 +51,7 @@ import com.sendspindroid.ui.main.components.TvTrackProgressBar
 fun NowPlayingHeadUnit(
     metadata: TrackMetadata,
     groupName: String,
+    streamFormat: StreamFormat? = null,
     artworkSource: ArtworkSource?,
     isBuffering: Boolean,
     isPlaying: Boolean,
@@ -117,16 +120,14 @@ fun NowPlayingHeadUnit(
             )
         }
 
-        // Group Name
-        if (groupName.isNotEmpty()) {
+        // Group Name and the stream's format
+        if (groupName.isNotEmpty() || streamFormat != null) {
             Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = stringResource(R.string.group_label, groupName),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            GroupAndFormatLine(
+                groupName = groupName,
+                streamFormat = streamFormat,
+                groupStyle = MaterialTheme.typography.labelLarge,
+                formatStyle = MaterialTheme.typography.labelMedium
             )
         }
 

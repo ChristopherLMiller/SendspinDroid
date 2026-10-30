@@ -71,6 +71,12 @@
          Note: Only active when user enables "Auto-start on boot" in settings -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- MODIFY_AUDIO_SETTINGS: Set the preferred mixer attributes of media on a USB DAC
+         Permission level: Normal (auto-granted)
+         Used by: Bit-perfect USB output (Android 14+), AudioManager.setPreferredMixerAttributes
+         Note: Only used when the user turns on "Bit-perfect USB output" -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
     <!-- Package visibility: lets Settings see which apps take a text share.
          On a TV the only one may be a stub, and then Report a problem and
          Export Debug Logs are hidden. -->

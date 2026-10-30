@@ -9,6 +9,7 @@ import android.os.HandlerThread
 import android.os.Process
 import com.sendspindroid.logging.PlayerLog
 import com.sendspindroid.sendspin.audio.AudioSink
+import com.sendspindroid.sendspin.decoder.PcmConverter
 import com.sendspindroid.sendspin.audio.AudioTrackSink
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import kotlinx.coroutines.CoroutineDispatcher
@@ -98,6 +99,7 @@ private fun defaultSinkFactory(
     channels: Int,
     bitDepth: Int,
     bufferSize: Int,
+    lowLatency: Boolean = true,
 ): AudioSink {
     val channelConfig = when (channels) {
         1 -> AudioFormat.CHANNEL_OUT_MONO
@@ -135,7 +137,7 @@ private fun defaultSinkFactory(
         )
         .setBufferSizeInBytes(bufferSize)
         .setTransferMode(AudioTrack.MODE_STREAM)
-        .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+        .apply { if (lowLatency) setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) }
         .build()
     return AudioTrackSink(track, bytesPerFrame)
 }
@@ -191,17 +193,18 @@ interface SyncAudioPlayerCallback {
  */
 class SyncAudioPlayer(
     private val timeFilter: SendspinTimeFilter,
-    private val sampleRate: Int = SendSpinProtocol.AudioFormat.SAMPLE_RATE,
+    val sampleRate: Int = SendSpinProtocol.AudioFormat.SAMPLE_RATE,
     private val channels: Int = SendSpinProtocol.AudioFormat.CHANNELS,
-    private val bitDepth: Int = SendSpinProtocol.AudioFormat.BIT_DEPTH,
+    /** The bit depth the output plays at, which can be wider than the stream's. */
+    val bitDepth: Int = SendSpinProtocol.AudioFormat.BIT_DEPTH,
     private val maxQueueSamples: Long = 0,  // 0 = unlimited; >0 caps queue to this many samples
     // Injectable monotonic clock for testability; production default is System.nanoTime().
     private val nowNs: () -> Long = { System.nanoTime() },
-    // Injectable audio sink factory for testability; production default wraps AudioTrack.
+    // Injectable audio sink factory for testability; production default (null) wraps AudioTrack.
     // The bufferSize parameter is precomputed (via AudioTrack.getMinBufferSize + multiplier)
     // and passed in rather than queried inside the factory.
-    private val sinkFactory: (sampleRate: Int, channels: Int, bitDepth: Int, bufferSize: Int) -> AudioSink =
-        ::defaultSinkFactory,
+    private val sinkFactory: ((sampleRate: Int, channels: Int, bitDepth: Int, bufferSize: Int) -> AudioSink)? =
+        null,
 ) {
     companion object {
         // Sync correction thresholds (microseconds), from the spec's suggested
@@ -426,6 +429,9 @@ class SyncAudioPlayer(
     // Gain on the track while not muted (see setVolume). Written on the main thread.
     @Volatile private var trackGain = 1f
 
+    // The output passes the audio to the device untouched (useBitPerfectOutput)
+    @Volatile private var bitPerfect = false
+
     // 2D Kalman filter for sync error smoothing (tracks offset + drift)
     private val syncErrorFilter = SyncErrorFilter.forDacSyncError()
 
@@ -529,7 +535,9 @@ class SyncAudioPlayer(
         val bufferSize = maxOf(minBufferSize * BUFFER_SIZE_MULTIPLIER, sampleRate * bytesPerFrame) // ~1 second
 
         try {
-            audioSink = sinkFactory(sampleRate, channels, bitDepth, bufferSize)
+            // The bit-perfect output is a mix port of its own, outside the fast path
+            audioSink = sinkFactory?.invoke(sampleRate, channels, bitDepth, bufferSize)
+                ?: defaultSinkFactory(sampleRate, channels, bitDepth, bufferSize, lowLatency = !bitPerfect)
             if (muteReasons.isNotEmpty() || trackGain != 1f) applyGain()
 
             PlayerLog.Audio.i("AudioTrack initialized: ${sampleRate}Hz, ${channels}ch, ${bitDepth}bit, buffer=${bufferSize}bytes")
@@ -715,7 +723,9 @@ class SyncAudioPlayer(
      * Mute or un-mute the output for one [reason]. Mute is AudioTrack gain, not
      * device volume, so the two stay independent: "a volume change ... MUST NOT
      * clear the mute state". It takes effect immediately and audio keeps
-     * draining in sync while muted, so un-muting is exactly in time.
+     * draining in sync while muted, so un-muting is exactly in time. On a
+     * bit-perfect output it is silence written in place of the audio, from
+     * the next chunk on.
      *
      * Main thread only.
      */
@@ -725,9 +735,27 @@ class SyncAudioPlayer(
         PlayerLog.Audio.i("Mute $reason=$muted, muted by $muteReasons")
     }
 
+    /**
+     * The output this player plays on passes the audio to the device
+     * untouched: Android applies no volume to it, so the gain and the mutes
+     * are applied to the samples instead, as they are written, and the track
+     * is left at unity. At full volume and unmuted nothing is touched. Call
+     * before [initialize].
+     */
+    fun useBitPerfectOutput() {
+        bitPerfect = true
+        applyGain()
+    }
+
+    /** Whether the output passes the audio to the device untouched. */
+    val isBitPerfect: Boolean get() = bitPerfect
+
+    // The gain of the output as it stands: the track gain, or nothing while muted
+    private val outputGain: Float get() = if (muteReasons.isEmpty()) trackGain else 0f
+
     private fun applyGain() {
         try {
-            audioSink?.setVolume(if (muteReasons.isEmpty()) trackGain else 0f)
+            audioSink?.setVolume(if (bitPerfect) 1f else outputGain)
         } catch (e: IllegalStateException) {
             // The track is being released: there is nothing left to set the gain on
             PlayerLog.Audio.v("Gain not applied: the AudioTrack is being released")
@@ -1872,7 +1900,9 @@ class SyncAudioPlayer(
         snapDropFrames -= skipFrames
         framesDropped += skipFrames
 
-        val written = writeWithCorrection(track, chunk.pcmData, skipFrames * bytesPerFrame)
+        // On a bit-perfect output the gain goes on the samples; a full one leaves them as they are
+        val pcm = if (bitPerfect) PcmConverter.applyGain(chunk.pcmData, bitDepth, outputGain) else chunk.pcmData
+        val written = writeWithCorrection(track, pcm, skipFrames * bytesPerFrame)
 
         // Update frame tracking
         val framesWritten = written / bytesPerFrame

@@ -138,9 +138,20 @@ class NetworkEvaluator(private val context: Context) {
             wifiLinkSpeedMbps = linkSpeed,
             wifiFrequencyMhz = frequency,
             cellularType = cellType,
-            quality = quality
+            quality = quality,
+            onMobileData = isOnMobileData(capabilities)
         )
     }
+
+    /**
+     * Cellular and neither Wi-Fi nor Ethernet. A VPN's capabilities carry
+     * the transports of the networks under it, so a VPN over mobile data
+     * counts too.
+     */
+    private fun isOnMobileData(capabilities: NetworkCapabilities): Boolean =
+        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+            !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
 
     /**
      * Gets WiFi details (RSSI, link speed, frequency).

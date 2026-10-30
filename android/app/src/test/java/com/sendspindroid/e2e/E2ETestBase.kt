@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.preference.PreferenceManager
 import com.sendspindroid.UserSettings
+import com.sendspindroid.sendspin.protocol.AudioQuality
 import com.sendspindroid.coordinator.TransportState
 import com.sendspindroid.sendspin.SendSpin
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
@@ -56,7 +57,7 @@ abstract class E2ETestBase {
         // Mock UserSettings
         mockkObject(UserSettings)
         every { UserSettings.getPlayerId() } returns "test-player-e2e"
-        every { UserSettings.getPreferredCodec() } returns "pcm"
+        every { UserSettings.audioQuality(any()) } returns AudioQuality.HIGH
         every { UserSettings.lowMemoryMode } returns false
         every { UserSettings.highPowerMode } returns false
 

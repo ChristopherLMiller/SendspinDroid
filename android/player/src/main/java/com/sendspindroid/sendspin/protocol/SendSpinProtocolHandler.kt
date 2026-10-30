@@ -294,31 +294,15 @@ abstract class SendSpinProtocolHandler(
         private set
 
     /**
-     * The default format, 48 kHz 16-bit, leads each codec's entries. A server
-     * that takes the first entry it can produce then streams at the default,
-     * not at the highest rate and depth the device accepts. Codecs keep their
-     * order, so the preferred one still comes first.
-     */
-    private fun defaultFirst(formats: List<MessageBuilder.FormatEntry>): List<MessageBuilder.FormatEntry> =
-        formats.map { it.codec }.distinct().flatMap { codec ->
-            val entries = formats.filter { it.codec == codec }
-            val (leading, rest) = entries.partition {
-                it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE &&
-                    it.bitDepth == SendSpinProtocol.AudioFormat.BIT_DEPTH
-            }
-            leading + rest
-        }
-
-    /**
      * Send client/hello, the reply to server/hello.
      *
      * Buffer capacity is computed from the format list and target duration
      * so the wire-byte cap scales with the highest PCM bitrate we advertise.
      */
     private fun sendClientHello() {
-        val formats = defaultFirst(getSupportedFormats())
+        val formats = getSupportedFormats()
         advertisedFormats = formats
-        // The hello's priority order already puts the preferred codec first.
+        // The hello's priority order already puts the preferred format first.
         preferredFormat = null
         val bufferDuration = if (isLowMemoryMode()) {
             SendSpinProtocol.Buffer.DURATION_LOW_MEM_SEC
@@ -744,28 +728,43 @@ abstract class SendSpinProtocolHandler(
     }
 
     /**
-     * Prefer [codec] for this player's stream.
+     * Prefer [codec] at [bitDepth], at the default sample rate, for this
+     * player's stream.
      *
      * Reported as `format` in the client/state player object: "When `format`
      * changes while a `player` stream is active, the server re-derives the
      * stream format and sends a `stream/start` if it changed", which flows
-     * through the normal format-change reconfiguration path.
+     * through the normal format-change reconfiguration path. Nothing is sent
+     * when it is the format already asked for: the hello's first entry, or
+     * the preference last reported.
      *
      * The preference "MUST be one of the entries in `supported_formats`", and
-     * client/hello is sent once per connection, so a codec this connection did
-     * not advertise can only take effect on the next one.
+     * client/hello is sent once per connection, so a format this connection
+     * did not advertise can only take effect on the next one.
      */
-    fun setPreferredCodec(codec: String) {
-        val format = advertisedFormats.firstOrNull { it.codec == codec }
+    fun setPreferredFormat(codec: String, bitDepth: Int) {
+        val format = advertisedFormats.firstOrNull {
+            it.codec == codec && it.bitDepth == bitDepth &&
+                it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE
+        }
         if (format == null) {
-            Log.i(tag, "Preferred codec $codec was not advertised on this connection; " +
+            Log.i(tag, "Preferred format $codec/${bitDepth}bit was not advertised on this connection; " +
                 "it applies from the next connect")
             return
         }
+        if (format == requestedFormat) return
         Log.i(tag, "Preferring stream format: $format")
         preferredFormat = format
         sendPlayerStateUpdate()
     }
+
+    /**
+     * The format this connection asks the server for: the preference last
+     * reported in client/state, else the first entry of its client/hello.
+     * Null before the hello.
+     */
+    val requestedFormat: MessageBuilder.FormatEntry?
+        get() = preferredFormat ?: advertisedFormats.firstOrNull()
 
     // ========== Player State Methods ==========
 
@@ -2329,6 +2328,8 @@ abstract class SendSpinProtocolHandler(
         val pskCategory: PskCategory?,
         val minBufferMs: Int,
         val requiredLeadTimeMs: Int,
+        /** See [SendSpinProtocolHandler.requestedFormat]. */
+        val requestedFormat: MessageBuilder.FormatEntry?,
     )
 
     fun protocolStats() = ProtocolStats(
@@ -2336,6 +2337,7 @@ abstract class SendSpinProtocolHandler(
         pskCategory = if (wireCodec != null) matchedPskCategory() else null,
         minBufferMs = minBufferEstimator.minBufferMs + syncOffsetLeadMs(),
         requiredLeadTimeMs = requiredLeadTimeMs(),
+        requestedFormat = requestedFormat,
     )
 
     // ========== Artwork (roles/artwork/v1.md) ==========

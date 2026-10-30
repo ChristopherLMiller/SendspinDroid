@@ -1,5 +1,7 @@
 package com.sendspindroid.sendspin.protocol.message
 
+import com.sendspindroid.sendspin.protocol.QualityLadder
+import com.sendspindroid.sendspin.protocol.QualityStep
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -279,163 +281,80 @@ class MessageBuilderTest {
 
     // --- buildSupportedFormats ---
 
-    @Test
-    fun buildSupportedFormats_preferredCodecFirst_pcmLast() {
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "opus",
-            isCodecSupported = { it in listOf("opus", "pcm") }
-        )
-        assertTrue(formats.isNotEmpty())
-        assertEquals("opus", formats.first().codec)
-        assertEquals("pcm", formats.last().codec)
-    }
+    private val allSteps = QualityStep.entries.toList()
 
     @Test
-    fun buildSupportedFormats_onlyPreferredAndPcm_noSecondaryCodec() {
-        // Regression guard for issue #26: previously a hardcoded [flac, opus] secondary
-        // list was appended after the preferred codec. Now only the preferred codec
-        // and PCM are advertised.
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "opus",
-            isCodecSupported = { it in listOf("opus", "flac", "pcm") }
-        )
-        val codecsAdvertised = formats.map { it.codec }.toSet()
-        assertEquals(setOf("opus", "pcm"), codecsAdvertised)
-    }
-
-    @Test
-    fun buildSupportedFormats_preferredPcmProducesPcmOnly() {
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "pcm",
-            isCodecSupported = { it == "pcm" }
-        )
-        // Pin the dedup: pcm once, not twice.
-        assertEquals(1, formats.size)
-        assertTrue(formats.all { it.codec == "pcm" })
-    }
-
-    @Test
-    fun buildSupportedFormats_preferredUnsupportedFallsBackToPcm() {
-        // On a device where the preferred codec is not decodable, we still advertise
-        // PCM so the session is not silently broken.
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "opus",
-            isCodecSupported = { it == "pcm" }
-        )
-        val codecsAdvertised = formats.map { it.codec }.toSet()
-        assertEquals(setOf("pcm"), codecsAdvertised)
-        // Default supportedBitDepths = [16], so pcm stereo only.
-        assertEquals(1, formats.size)
-    }
-
-    @Test
-    fun buildSupportedFormats_noCodecsSupportedReturnsEmpty() {
-        // Pins the current behaviour for the degenerate case where not even PCM
-        // is supported. A real Android device should never produce this (PCM is
-        // always supported) but we lock it in so a future refactor can't
-        // silently change the contract.
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "opus",
-            isCodecSupported = { false }
-        )
-        assertTrue(formats.isEmpty())
-    }
-
-    @Test
-    fun buildSupportedFormats_stereoOnlyForEachCodec() {
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "flac",
-            isCodecSupported = { it in listOf("flac", "pcm") }
-        )
-        // flac at 16-bit stereo, pcm at 16-bit stereo: one channel count, as
-        // the player cannot switch between channel counts without a gap
-        assertEquals(2, formats.size)
-        assertEquals(setOf(2), formats.map { it.channels }.toSet())
-    }
-
-    @Test
-    fun buildSupportedFormats_multiBitDepthOnlyAppliesToPcm() {
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "flac",
-            isCodecSupported = { it in listOf("flac", "pcm") },
-            supportedBitDepths = listOf(16, 32)
-        )
-        // flac: 16-bit only = 1
-        // pcm:  32-bit + 16-bit = 2 (higher depths first)
-        assertEquals(3, formats.size)
-        assertEquals("flac", formats[0].codec)
-        assertEquals(16, formats[0].bitDepth)
-        assertEquals("pcm", formats[1].codec)
-        assertEquals(32, formats[1].bitDepth)
-        assertEquals("pcm", formats[2].codec)
-        assertEquals(16, formats[2].bitDepth)
-    }
-
-    @Test
-    fun buildSupportedFormats_defaultBitDepthIs16Only() {
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "pcm",
-            isCodecSupported = { it == "pcm" }
-        )
-        assertEquals(1, formats.size)
-        assertTrue(formats.all { it.bitDepth == 16 })
-    }
-
-    @Test
-    fun buildSupportedFormats_defaultSampleRateIs48kOnly() {
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "flac",
-            isCodecSupported = { it in listOf("flac", "pcm") }
+    fun buildSupportedFormats_listsEveryStepAtTheDefaultRateInTheGivenOrder() {
+        // The preferred step first, so a server taking the first entry streams it
+        val steps = QualityLadder.offerOrder(QualityStep.FLAC_24, allSteps.toSet())
+        val formats = MessageBuilder.buildSupportedFormats(steps)
+        assertEquals(
+            listOf("flac" to 24, "flac" to 16, "opus" to 16, "pcm" to 16, "pcm" to 24, "pcm" to 32),
+            formats.map { it.codec to it.bitDepth }
         )
         assertTrue(formats.all { it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE })
     }
 
     @Test
-    fun buildSupportedFormats_multiRateAdvertisedHighestFirstWithDepthsNested() {
+    fun buildSupportedFormats_stereoOnly() {
+        // One channel count, as the player cannot switch between them without a gap
+        val formats = MessageBuilder.buildSupportedFormats(allSteps)
+        assertEquals(setOf(2), formats.map { it.channels }.toSet())
+    }
+
+    @Test
+    fun buildSupportedFormats_aStepListedTwiceIsAdvertisedOnce() {
+        val formats = MessageBuilder.buildSupportedFormats(listOf(QualityStep.PCM_16, QualityStep.PCM_16))
+        assertEquals(1, formats.size)
+    }
+
+    @Test
+    fun buildSupportedFormats_noStepsMeansNoFormats() {
+        assertTrue(MessageBuilder.buildSupportedFormats(emptyList()).isEmpty())
+    }
+
+    @Test
+    fun buildSupportedFormats_otherRatesFollowTheLadderHighestFirst() {
         val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "pcm",
-            isCodecSupported = { it == "pcm" },
-            supportedBitDepths = listOf(16, 24),
+            steps = listOf(QualityStep.PCM_24, QualityStep.PCM_16),
             supportedSampleRates = listOf(44100, 96000, 48000)
         )
-        // Rate-major, depth-minor, both highest first.
+        // The ladder at 48 kHz, then each step at the other rates, highest first
         assertEquals(
-            listOf(96000 to 24, 96000 to 16, 48000 to 24, 48000 to 16, 44100 to 24, 44100 to 16),
+            listOf(48000 to 24, 48000 to 16, 96000 to 24, 44100 to 24, 96000 to 16, 44100 to 16),
             formats.map { it.sampleRate to it.bitDepth }
         )
     }
 
     @Test
-    fun buildSupportedFormats_flacGetsEveryRateAt16Bit() {
+    fun buildSupportedFormats_flacTakesOtherRatesAtItsOwnDepth() {
         val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "flac",
-            isCodecSupported = { it in listOf("flac", "pcm") },
+            steps = listOf(QualityStep.FLAC_24, QualityStep.FLAC_16),
             supportedSampleRates = listOf(96000, 48000)
         )
-        val flac = formats.filter { it.codec == "flac" }
-        assertEquals(listOf(96000, 48000), flac.map { it.sampleRate })
-        assertTrue(flac.all { it.bitDepth == 16 })
+        assertEquals(
+            listOf(48000 to 24, 48000 to 16, 96000 to 24, 96000 to 16),
+            formats.map { it.sampleRate to it.bitDepth }
+        )
     }
 
     @Test
     fun buildSupportedFormats_opusStaysAt48kWhateverRatesAreOffered() {
         val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "opus",
-            isCodecSupported = { it in listOf("opus", "pcm") },
+            steps = listOf(QualityStep.OPUS, QualityStep.PCM_16),
             supportedSampleRates = listOf(96000, 48000)
         )
         val opus = formats.filter { it.codec == "opus" }
         assertEquals(1, opus.size)
         assertEquals(SendSpinProtocol.AudioFormat.SAMPLE_RATE, opus.single().sampleRate)
         // PCM still gets both rates.
-        assertEquals(listOf(96000, 48000), formats.filter { it.codec == "pcm" }.map { it.sampleRate })
+        assertEquals(listOf(48000, 96000), formats.filter { it.codec == "pcm" }.map { it.sampleRate })
     }
 
     @Test
-    fun buildSupportedFormats_emptyRateListFallsBackToDefault() {
+    fun buildSupportedFormats_emptyRateListKeepsTheDefault() {
         val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "pcm",
-            isCodecSupported = { it == "pcm" },
+            steps = listOf(QualityStep.PCM_16),
             supportedSampleRates = emptyList()
         )
         assertEquals(1, formats.size)
@@ -446,27 +365,24 @@ class MessageBuilderTest {
     fun buildSupportedFormats_deviceVetoDropsRejectedCombinationsOnly() {
         // A device that opens everything up to 192 kHz, and 32-bit only up to 96 kHz.
         val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "pcm",
-            isCodecSupported = { it == "pcm" },
-            supportedBitDepths = listOf(16, 32),
+            steps = listOf(QualityStep.PCM_32, QualityStep.PCM_16),
             supportedSampleRates = listOf(768000, 192000, 96000, 48000),
             isFormatSupported = { _, rate, depth ->
                 rate <= 192000 && (depth == 16 || rate <= 96000)
             }
         )
         assertEquals(
-            listOf(192000 to 16, 96000 to 32, 96000 to 16, 48000 to 32, 48000 to 16),
+            listOf(48000 to 32, 48000 to 16, 96000 to 32, 192000 to 16, 96000 to 16),
             formats.map { it.sampleRate to it.bitDepth }
         )
     }
 
     @Test
     fun buildSupportedFormats_defaultRateIsNeverPutToTheDeviceVeto() {
-        // Even a veto that rejects everything leaves the 48 kHz fallback, so a
+        // Even a veto that rejects everything leaves the ladder at 48 kHz, so a
         // connection can still be made.
         val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "flac",
-            isCodecSupported = { it in listOf("flac", "pcm") },
+            steps = listOf(QualityStep.FLAC_16, QualityStep.PCM_16),
             supportedSampleRates = listOf(768000, 48000),
             isFormatSupported = { _, _, _ -> false }
         )
@@ -474,32 +390,14 @@ class MessageBuilderTest {
     }
 
     @Test
-    fun buildSupportedFormats_flacVetoedByDecoderKeepsPcmAtThatRate() {
+    fun buildSupportedFormats_candidateListStillReaches768kHz32Bit() {
         val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "flac",
-            isCodecSupported = { it in listOf("flac", "pcm") },
-            supportedSampleRates = listOf(768000, 48000),
-            isFormatSupported = { codec, _, _ -> codec == "pcm" }
-        )
-        assertEquals(
-            listOf("flac" to 48000, "pcm" to 768000, "pcm" to 48000),
-            formats.map { it.codec to it.sampleRate }
-        )
-    }
-
-    @Test
-    fun buildSupportedFormats_candidateListReachesTop768kHz32Bit() {
-        val formats = MessageBuilder.buildSupportedFormats(
-            preferredCodec = "pcm",
-            isCodecSupported = { it == "pcm" },
-            supportedBitDepths = listOf(16, 24, 32),
+            steps = listOf(QualityStep.PCM_16, QualityStep.PCM_24, QualityStep.PCM_32),
             supportedSampleRates = SendSpinProtocol.AudioFormat.SUPPORTED_SAMPLE_RATES
         )
-        val first = formats.first()
-        assertEquals(768000, first.sampleRate)
-        assertEquals(32, first.bitDepth)
-        assertEquals(2, first.channels)
-        assertTrue(formats.any { it.sampleRate == SendSpinProtocol.AudioFormat.SAMPLE_RATE })
+        // The default leads; the highest rate and depth are still offered
+        assertEquals(MessageBuilder.FormatEntry("pcm", 48000, 2, 16), formats.first())
+        assertTrue(formats.contains(MessageBuilder.FormatEntry("pcm", 768000, 2, 32)))
     }
 
     // --- calculateBufferCapacity ---

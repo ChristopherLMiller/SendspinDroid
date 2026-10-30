@@ -1,8 +1,10 @@
 package com.sendspindroid.sendspin.decoder
 
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.util.Log
+import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import java.nio.ByteBuffer
 
 /**
@@ -15,6 +17,10 @@ import java.nio.ByteBuffer
  * - Input buffers are submitted via dequeueInputBuffer/queueInputBuffer
  * - Output buffers are drained via dequeueOutputBuffer/releaseOutputBuffer
  * - flush() returns to the Flushed sub-state without needing start()
+ *
+ * What the codec hands back is converted to the stream's bit depth, from
+ * the encoding its output format names (see [PcmConverter]): a FLAC decoder
+ * asked for high-resolution output puts out float.
  */
 abstract class MediaCodecDecoder(
     protected val mimeType: String
@@ -34,11 +40,22 @@ abstract class MediaCodecDecoder(
 
         // How long drain() waits for the codec to hand back what it holds
         private const val DRAIN_TIMEOUT_NS = 100_000_000L
+
+        /** The PCM encoding [format] names; 16-bit when it names none, as MediaFormat defines. */
+        internal fun pcmEncodingOf(format: MediaFormat?): Int =
+            if (format != null && format.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                format.getInteger(MediaFormat.KEY_PCM_ENCODING)
+            } else {
+                AudioFormat.ENCODING_PCM_16BIT
+            }
     }
 
     protected var mediaCodec: MediaCodec? = null
     protected var outputFormat: MediaFormat? = null
     private var _isConfigured = false
+
+    // The bit depth the stream plays at, which the output is converted to
+    private var streamBitDepth = SendSpinProtocol.AudioFormat.BIT_DEPTH
 
     override val isConfigured: Boolean
         get() = _isConfigured
@@ -49,6 +66,7 @@ abstract class MediaCodecDecoder(
         bitDepth: Int,
         codecHeader: ByteArray?
     ) {
+        streamBitDepth = bitDepth
         try {
             // Create base MediaFormat
             val format = MediaFormat.createAudioFormat(mimeType, sampleRate, channels)
@@ -59,10 +77,15 @@ abstract class MediaCodecDecoder(
             // Create and configure decoder
             mediaCodec = MediaCodec.createDecoderByType(mimeType)
             mediaCodec?.configure(format, null, null, 0)
+            // What it puts out until a format change says otherwise. Only
+            // read for the encoding, so a codec that will not say yet is
+            // taken at the 16-bit default rather than failing the stream.
+            outputFormat = runCatching { mediaCodec?.outputFormat }.getOrNull()
             mediaCodec?.start()
 
             _isConfigured = true
-            Log.d(TAG, "Decoder configured: $mimeType, ${sampleRate}Hz, ${channels}ch")
+            Log.d(TAG, "Decoder configured: $mimeType, ${sampleRate}Hz, ${channels}ch, ${bitDepth}bit " +
+                "(puts out encoding ${pcmEncodingOf(outputFormat)})")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to configure decoder", e)
             release()
@@ -158,7 +181,7 @@ abstract class MediaCodecDecoder(
                     val pcmData = ByteArray(bufferInfo.size)
                     outBuffer.position(bufferInfo.offset)
                     outBuffer.get(pcmData, 0, bufferInfo.size)
-                    output += DecodedAudio(bufferInfo.presentationTimeUs, pcmData)
+                    output += DecodedAudio(bufferInfo.presentationTimeUs, toStreamPcm(pcmData))
                 }
                 codec.releaseOutputBuffer(outputIndex, false)
                 if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
@@ -199,7 +222,7 @@ abstract class MediaCodecDecoder(
                         val pcmData = ByteArray(bufferInfo.size)
                         outBuffer.position(bufferInfo.offset)
                         outBuffer.get(pcmData, 0, bufferInfo.size)
-                        output += DecodedAudio(bufferInfo.presentationTimeUs, pcmData)
+                        output += DecodedAudio(bufferInfo.presentationTimeUs, toStreamPcm(pcmData))
                     }
                     codec.releaseOutputBuffer(outputIndex, false)
                 }
@@ -223,6 +246,10 @@ abstract class MediaCodecDecoder(
             }
         }
     }
+
+    /** [pcm], as the codec put it out, at the stream's bit depth. */
+    private fun toStreamPcm(pcm: ByteArray): ByteArray =
+        PcmConverter.convert(pcm, pcmEncodingOf(outputFormat), streamBitDepth)
 
     /**
      * Flush the decoder to reset internal state.

@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.preference.PreferenceManager
 import com.sendspindroid.UserSettings
+import com.sendspindroid.sendspin.protocol.AudioQuality
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import com.sendspindroid.sendspin.transport.SendSpinTransport
 import com.sendspindroid.sendspin.transport.TransportState
@@ -59,7 +60,7 @@ class SendSpinDisconnectTest {
         // Mock UserSettings
         mockkObject(UserSettings)
         every { UserSettings.getPlayerId() } returns "test-player-id"
-        every { UserSettings.getPreferredCodec() } returns "opus"
+        every { UserSettings.audioQuality(any()) } returns AudioQuality.LOW
         every { UserSettings.lowMemoryMode } returns false
         every { UserSettings.highPowerMode } returns false
 

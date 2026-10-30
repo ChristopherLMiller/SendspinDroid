@@ -185,4 +185,44 @@ class NetworkEvaluatorVpnTest {
         assertFalse(state.isConnected)
         assertEquals(TransportType.UNKNOWN, state.transportType)
     }
+
+    // ---- Mobile data, which picks the audio quality setting ----
+
+    private fun onMobileData(vararg transports: Int): Boolean {
+        val mockNetwork = mockk<Network>(relaxed = true)
+        every { mockConnectivityManager.activeNetwork } returns mockNetwork
+        every { mockConnectivityManager.getNetworkCapabilities(mockNetwork) } returns mockCapabilities(*transports)
+        evaluator.evaluateCurrentNetwork()
+        return evaluator.networkState.value.onMobileData
+    }
+
+    @Test
+    fun `cellular is mobile data, with or without a VPN over it`() {
+        assertTrue(onMobileData(NetworkCapabilities.TRANSPORT_CELLULAR))
+        assertTrue(onMobileData(NetworkCapabilities.TRANSPORT_VPN, NetworkCapabilities.TRANSPORT_CELLULAR))
+    }
+
+    @Test
+    fun `Wi-Fi, Ethernet and a VPN over them are not mobile data`() {
+        assertFalse(onMobileData(NetworkCapabilities.TRANSPORT_WIFI))
+        assertFalse(onMobileData(NetworkCapabilities.TRANSPORT_ETHERNET))
+        assertFalse(onMobileData(NetworkCapabilities.TRANSPORT_VPN, NetworkCapabilities.TRANSPORT_WIFI))
+        // A VPN over both networks, as while Wi-Fi takes over from cellular
+        assertFalse(
+            onMobileData(
+                NetworkCapabilities.TRANSPORT_VPN,
+                NetworkCapabilities.TRANSPORT_WIFI,
+                NetworkCapabilities.TRANSPORT_CELLULAR
+            )
+        )
+    }
+
+    @Test
+    fun `no network is not mobile data`() {
+        every { mockConnectivityManager.activeNetwork } returns null
+
+        evaluator.evaluateCurrentNetwork()
+
+        assertFalse(evaluator.networkState.value.onMobileData)
+    }
 }

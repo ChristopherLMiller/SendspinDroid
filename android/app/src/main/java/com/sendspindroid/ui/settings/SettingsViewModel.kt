@@ -21,7 +21,10 @@ import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.pairing.PairingOutcome
 import com.sendspindroid.sendspin.pairing.PairingToken
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
+import com.sendspindroid.sendspin.protocol.AudioQuality
+import com.sendspindroid.sendspin.protocol.QualityStep
 import com.sendspindroid.ui.adaptive.isTvDevice
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,9 +50,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         const val EXTRA_LOG_LEVEL = "log_level"
         const val ACTION_HIGH_POWER_MODE_CHANGED = "com.sendspindroid.ACTION_HIGH_POWER_MODE_CHANGED"
         const val EXTRA_HIGH_POWER_MODE_ENABLED = "high_power_mode_enabled"
-        const val ACTION_PREFERRED_CODEC_CHANGED = "com.sendspindroid.ACTION_PREFERRED_CODEC_CHANGED"
+        const val ACTION_AUDIO_QUALITY_CHANGED = "com.sendspindroid.ACTION_AUDIO_QUALITY_CHANGED"
+        const val ACTION_BIT_PERFECT_USB_CHANGED = "com.sendspindroid.ACTION_BIT_PERFECT_USB_CHANGED"
         const val ACTION_PLAYER_NAME_CHANGED = "com.sendspindroid.ACTION_PLAYER_NAME_CHANGED"
-        const val EXTRA_PREFERRED_CODEC = "preferred_codec"
     }
 
     private val prefs = PreferenceManager.getDefaultSharedPreferences(application)
@@ -115,11 +118,22 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _syncOffset = MutableStateFlow(UserSettings.getSyncOffsetMs())
     val syncOffset: StateFlow<Int> = _syncOffset.asStateFlow()
 
-    private val _preferredCodec = MutableStateFlow(UserSettings.getPreferredCodec())
-    val preferredCodec: StateFlow<String> = _preferredCodec.asStateFlow()
+    private val _wifiAudioQuality = MutableStateFlow(UserSettings.wifiAudioQuality)
+    val wifiAudioQuality: StateFlow<AudioQuality> = _wifiAudioQuality.asStateFlow()
 
-    private val _supportedCodecs = MutableStateFlow(computeSupportedCodecs())
-    val supportedCodecs: StateFlow<Set<String>> = _supportedCodecs.asStateFlow()
+    private val _mobileAudioQuality = MutableStateFlow(UserSettings.mobileAudioQuality)
+    val mobileAudioQuality: StateFlow<AudioQuality> = _mobileAudioQuality.asStateFlow()
+
+    /**
+     * The steps of the quality ladder this device plays, for showing what
+     * each quality comes to here. Null until the device has been asked, off
+     * the main thread: it can mean opening a decoder.
+     */
+    private val _supportedQualitySteps = MutableStateFlow<Set<QualityStep>?>(null)
+    val supportedQualitySteps: StateFlow<Set<QualityStep>?> = _supportedQualitySteps.asStateFlow()
+
+    private val _bitPerfectUsb = MutableStateFlow(UserSettings.bitPerfectUsb)
+    val bitPerfectUsb: StateFlow<Boolean> = _bitPerfectUsb.asStateFlow()
 
     // Performance settings
     private val _lowMemoryMode = MutableStateFlow(UserSettings.lowMemoryMode)
@@ -154,6 +168,14 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     init {
         // Start periodic debug stats updates
         startDebugStatsUpdates()
+        refreshSupportedQualitySteps()
+    }
+
+    private fun refreshSupportedQualitySteps() {
+        val lowMemoryMode = UserSettings.lowMemoryMode
+        viewModelScope.launch(Dispatchers.Default) {
+            _supportedQualitySteps.value = AudioDecoderFactory.supportedQualitySteps(lowMemoryMode)
+        }
     }
 
     private fun startDebugStatsUpdates() {
@@ -240,16 +262,31 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun increaseSyncOffset() = adjustSyncOffset(SYNC_OFFSET_STEP_MS)
     fun decreaseSyncOffset() = adjustSyncOffset(-SYNC_OFFSET_STEP_MS)
 
-    fun setPreferredCodec(codec: String) {
-        UserSettings.setPreferredCodec(codec)
-        _preferredCodec.value = codec
+    fun setWifiAudioQuality(quality: AudioQuality) {
+        UserSettings.wifiAudioQuality = quality
+        _wifiAudioQuality.value = quality
+        notifyAudioQualityChanged()
+    }
 
-        // Tell PlaybackService so a live session can report the new format
-        // preference instead of waiting for the next connect.
-        val intent = Intent(ACTION_PREFERRED_CODEC_CHANGED).apply {
-            putExtra(EXTRA_PREFERRED_CODEC, codec)
-        }
-        LocalBroadcastManager.getInstance(getApplication()).sendBroadcast(intent)
+    fun setMobileAudioQuality(quality: AudioQuality) {
+        UserSettings.mobileAudioQuality = quality
+        _mobileAudioQuality.value = quality
+        notifyAudioQualityChanged()
+    }
+
+    /** PlaybackService reconnects a live session, whose hello offers other rates. */
+    fun setBitPerfectUsb(enabled: Boolean) {
+        UserSettings.bitPerfectUsb = enabled
+        _bitPerfectUsb.value = enabled
+        LocalBroadcastManager.getInstance(getApplication())
+            .sendBroadcast(Intent(ACTION_BIT_PERFECT_USB_CHANGED))
+    }
+
+    // Tell PlaybackService so a live session can ask for the new format at
+    // once instead of waiting for the next connect.
+    private fun notifyAudioQualityChanged() {
+        LocalBroadcastManager.getInstance(getApplication())
+            .sendBroadcast(Intent(ACTION_AUDIO_QUALITY_CHANGED))
     }
 
     // Performance settings
@@ -260,6 +297,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setLowMemoryMode(enabled: Boolean): Boolean {
         prefs.edit().putBoolean(UserSettings.KEY_LOW_MEMORY_MODE, enabled).apply()
         _lowMemoryMode.value = enabled
+        // It keeps every codec at 16-bit
+        refreshSupportedQualitySteps()
         return true // Always requires restart
     }
 
@@ -309,11 +348,5 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun clearLogs() {
         AppLog.clear()
         _logFileStats.value = AppLog.logFileStats()
-    }
-
-    private fun computeSupportedCodecs(): Set<String> {
-        return listOf("opus", "flac", "pcm")
-            .filter { AudioDecoderFactory.isCodecSupported(it) }
-            .toSet()
     }
 }

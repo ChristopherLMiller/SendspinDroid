@@ -1,5 +1,6 @@
 package com.sendspindroid.sendspin.decoder
 
+import android.media.AudioFormat
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.util.Log
@@ -14,6 +15,7 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * Unit tests for [MediaCodecDecoder].
@@ -244,7 +246,7 @@ class MediaCodecDecoderTest {
         every { mockCodec.getOutputBuffer(0) } returns buf0
         every { mockCodec.getOutputBuffer(1) } returns buf1
 
-        val mockFormat = mockk<MediaFormat>()
+        val mockFormat = mockk<MediaFormat>(relaxed = true)
         every { mockCodec.outputFormat } returns mockFormat
 
         val input = ByteArray(100)
@@ -269,7 +271,7 @@ class MediaCodecDecoderTest {
             MediaCodec.INFO_TRY_AGAIN_LATER
         )
 
-        val mockFormat = mockk<MediaFormat>()
+        val mockFormat = mockk<MediaFormat>(relaxed = true)
         every { mockCodec.outputFormat } returns mockFormat
 
         decoder.decode(ByteArray(100), 0L)
@@ -404,5 +406,44 @@ class MediaCodecDecoderTest {
         // Waits for the first buffer, then only polls.
         assertTrue("first wait was ${timeouts[0]}", timeouts[0] > 0L)
         assertEquals(0L, timeouts[1])
+    }
+
+    // =========================================================================
+    // Output at the stream's bit depth
+    // =========================================================================
+
+    @Test
+    fun decode_convertsWhatTheCodecPutsOutToTheStreamsBitDepth() {
+        // A FLAC decoder asked for high resolution puts out float
+        mockkStatic(MediaFormat::class)
+        every { MediaFormat.createAudioFormat(any(), any(), any()) } returns mockk(relaxed = true)
+        mockkStatic(MediaCodec::class)
+        every { MediaCodec.createDecoderByType(any()) } returns mockCodec
+        val floatOutput = mockk<MediaFormat> {
+            every { containsKey(MediaFormat.KEY_PCM_ENCODING) } returns true
+            every { getInteger(MediaFormat.KEY_PCM_ENCODING) } returns AudioFormat.ENCODING_PCM_FLOAT
+        }
+        every { mockCodec.outputFormat } returns floatOutput
+        decoder.configure(sampleRate = 48000, channels = 2, bitDepth = 24, codecHeader = null)
+
+        every { mockCodec.dequeueInputBuffer(any()) } returns 0
+        every { mockCodec.getInputBuffer(0) } returns ByteBuffer.allocate(1024)
+        val decoded = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putFloat(0.5f).putFloat(-0.5f).array()
+        val outputs = listOf(0, MediaCodec.INFO_TRY_AGAIN_LATER).iterator()
+        every { mockCodec.dequeueOutputBuffer(any(), any()) } answers {
+            val idx = if (outputs.hasNext()) outputs.next() else MediaCodec.INFO_TRY_AGAIN_LATER
+            if (idx >= 0) {
+                val info = firstArg<MediaCodec.BufferInfo>()
+                info.offset = 0
+                info.size = decoded.size
+            }
+            idx
+        }
+        every { mockCodec.getOutputBuffer(0) } returns ByteBuffer.wrap(decoded)
+
+        val pcm = decoder.decode(ByteArray(10), 0L).single().pcm
+
+        // +/-0.5 at 24 bits, packed little-endian: 0x400000 and -0x400000
+        assertArrayEquals(byteArrayOf(0x00, 0x00, 0x40, 0x00, 0x00, 0xC0.toByte()), pcm)
     }
 }

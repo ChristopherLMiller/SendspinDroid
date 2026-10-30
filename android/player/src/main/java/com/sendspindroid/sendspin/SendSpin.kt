@@ -7,6 +7,9 @@ import com.sendspindroid.sendspin.pairing.PairAbortReason
 import com.sendspindroid.sendspin.pairing.PairingOutcome
 import com.sendspindroid.sendspin.protocol.Activity
 import com.sendspindroid.sendspin.protocol.AdmissionState
+import com.sendspindroid.sendspin.protocol.AudioQuality
+import com.sendspindroid.sendspin.protocol.QualityLadder
+import com.sendspindroid.sendspin.protocol.QualityStep
 import com.sendspindroid.sendspin.protocol.ColorState
 import com.sendspindroid.sendspin.protocol.ConnectionAdmission
 import com.sendspindroid.sendspin.protocol.ControllerState
@@ -44,6 +47,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
+import com.sendspindroid.sendspin.audio.BitPerfectFormats
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import com.sendspindroid.sendspin.protocol.message.MessageBuilder
 import com.sendspindroid.sendspin.pairing.PairMethod
@@ -804,12 +808,44 @@ class SendSpin(
 
     override fun persistOutputDelayMs(delayMs: Int) = host.setOutputDelayMs(delayMs)
 
+    /**
+     * What the quality ladder came to for a connection: whether it runs over
+     * mobile data, the quality the user chose for that network, and the step
+     * of the ladder it asks for on this device.
+     */
+    data class QualityChoice(val mobileData: Boolean, val quality: AudioQuality, val step: QualityStep)
+
+    /** This connection's [QualityChoice]; set as its client/hello is built, null before. */
+    @Volatile
+    var qualityChoice: QualityChoice? = null
+        private set
+
+    // The steps this connection's client/hello offered: the only ones a
+    // change of quality can move its stream to.
+    @Volatile
+    private var offeredSteps: Set<QualityStep> = emptySet()
+
+    // The bit-perfect formats this connection's client/hello offered its
+    // other rates from, or null for none
+    @Volatile
+    private var offeredBitPerfect: BitPerfectFormats? = null
+
+    /**
+     * Every step of the quality ladder this device plays, the one for the
+     * user's quality on this connection's network first (see
+     * [QualityLadder.offerOrder]), so the stream can be moved between them
+     * without a new connection.
+     */
     override fun getSupportedFormats(): List<MessageBuilder.FormatEntry> {
-        val bitDepths = if (isLowMemoryMode()) {
-            listOf(16)
-        } else {
-            AudioDecoderFactory.getSupportedPcmBitDepths()
-        }
+        val supported = AudioDecoderFactory.supportedQualitySteps(isLowMemoryMode())
+        // The network a connection runs over is the one in use as its hello
+        // is sent, and it stays on it.
+        val mobileData = host.onMobileData()
+        val choice = chooseQuality(mobileData, supported)
+        qualityChoice = choice
+        offeredSteps = supported
+        Log.i(TAG, "Quality ${choice.quality} on ${if (mobileData) "mobile data" else "Wi-Fi"}: " +
+            "asking for ${choice.step} (device plays ${supported.sorted()})")
         // Low-memory mode stays at the single default rate: the receive buffer
         // is sized from the highest PCM entry advertised, and high rates cost
         // proportionally more memory.
@@ -818,23 +854,86 @@ class SendSpin(
         } else {
             SendSpinProtocol.AudioFormat.SUPPORTED_SAMPLE_RATES
         }
+        // On a bit-perfect output only its own rates are offered, so a server
+        // that follows a track's native rate, or the next one up, picks a rate
+        // the device takes untouched
+        val bitPerfect = host.bitPerfectFormats()?.takeUnless { it.isEmpty() }
+        offeredBitPerfect = bitPerfect
+        if (bitPerfect != null) Log.i(TAG, "Offering the bit-perfect output's rates: ${bitPerfect.formats.sortedBy { it.first }}")
+        val playsOut: (Int, Int) -> Boolean = { rate, depth ->
+            bitPerfect?.covers(rate, depth) ?: AudioDecoderFactory.isPcmOutputSupported(rate, depth)
+        }
         return MessageBuilder.buildSupportedFormats(
-            preferredCodec = host.preferredCodec(),
-            isCodecSupported = { AudioDecoderFactory.isCodecSupported(it) },
-            supportedBitDepths = bitDepths,
+            steps = QualityLadder.offerOrder(choice.step, supported),
             supportedSampleRates = sampleRates,
             // Only rates this device's output (and, for FLAC, its decoder)
-            // really takes are offered. A compressed codec decodes to 16-bit
-            // PCM, so its output is probed at 16-bit.
+            // really takes are offered. FLAC decodes to the step's bit
+            // depth, so its output is probed at that depth.
             isFormatSupported = { codec, rate, depth ->
                 when (codec) {
-                    "pcm" -> AudioDecoderFactory.isPcmOutputSupported(rate, depth)
-                    "flac" -> AudioDecoderFactory.isCodecSupportedAtSampleRate(codec, rate) &&
-                        AudioDecoderFactory.isPcmOutputSupported(rate, 16)
+                    "pcm" -> playsOut(rate, depth)
+                    "flac" -> AudioDecoderFactory.isCodecSupportedAtSampleRate(codec, rate) && playsOut(rate, depth)
                     else -> false
                 }
             }
         )
+    }
+
+    /**
+     * Media's output changed (a USB DAC plugged in or out), or bit-perfect
+     * output was turned on or off. When that changes the bit-perfect formats
+     * this connection's client/hello offered its rates from, it connects
+     * again, for a hello with the new ones: the goodbye says "restart".
+     */
+    fun onOutputChanged() {
+        if (qualityChoice == null) return
+        val now = host.bitPerfectFormats()?.takeUnless { it.isEmpty() }
+        if (now == offeredBitPerfect) return
+        Log.i(TAG, "Bit-perfect output now ${now?.formats?.size ?: 0} formats: reconnecting for a hello that offers them")
+        disconnectForReselection()
+    }
+
+    private fun chooseQuality(mobileData: Boolean, supported: Set<QualityStep>): QualityChoice {
+        val quality = host.audioQuality(mobileData)
+        // PCM 16 is always supported, so the ladder always has a step
+        val step = QualityLadder.resolve(quality, supported) ?: QualityStep.PCM_16
+        return QualityChoice(mobileData, quality, step)
+    }
+
+    /**
+     * The user changed a quality setting: ask for the step it comes to on
+     * this connection's network.
+     *
+     * A step in another codec is asked for by connecting again, for a
+     * client/hello that leads with it. Music Assistant picks each session's
+     * sample rate and bit depth from the formats of the hello's first codec
+     * (to follow a track's native rate), and that choice outranks `format`
+     * in client/state, so the stream would stay in the old codec until the
+     * next connection. The goodbye says "restart": the owner of this client
+     * dials again, and a server that connected to us comes back.
+     *
+     * A step in the same codec is asked for at once, with `format`; the
+     * server answers with a `stream/start` that plays on from the old format
+     * without a gap. Nothing is done before the first client/hello, which
+     * reads the setting itself, or when the step is the one asked for already.
+     */
+    fun onAudioQualityChanged() {
+        val current = qualityChoice ?: return
+        val choice = chooseQuality(current.mobileData, offeredSteps)
+        val network = if (choice.mobileData) "mobile data" else "Wi-Fi"
+        if (choice.step == current.step) {
+            qualityChoice = choice
+            return
+        }
+        if (choice.step.codec != current.step.codec) {
+            Log.i(TAG, "Quality changed to ${choice.quality} on $network: reconnecting " +
+                "for a hello that leads with ${choice.step}")
+            disconnectForReselection()
+            return
+        }
+        qualityChoice = choice
+        Log.i(TAG, "Quality changed to ${choice.quality} on $network: asking for ${choice.step}")
+        setPreferredFormat(choice.step.codec, choice.step.bitDepth)
     }
 
     override fun onHandshakeComplete(serverName: String, serverId: String) {
@@ -891,8 +990,9 @@ class SendSpin(
         // the stream was inactive (we were not expecting data then).
         lastByteReceivedAtMs.set(monotonicMs())
 
-        val preferredCodec = host.preferredCodec()
-        Log.i(TAG, "Stream started: server chose codec=${config.codec} (we preferred=$preferredCodec)")
+        val asked = requestedFormat
+        Log.i(TAG, "Stream started: server chose ${config.codec}/${config.sampleRate}Hz/${config.bitDepth}bit " +
+            "(we asked for ${asked?.let { "${it.codec}/${it.sampleRate}Hz/${it.bitDepth}bit" }})")
         callback.onStreamStart(
             config.codec,
             config.sampleRate,
@@ -1228,6 +1328,9 @@ class SendSpin(
             _controllerState.value = null
             _colorState.value = null
             connectedAtMs = null
+            qualityChoice = null
+            offeredSteps = emptySet()
+            offeredBitPerfect = null
 
             // Before the state changes, so whoever reacts to the new state
             // can already have been told what to do about it.

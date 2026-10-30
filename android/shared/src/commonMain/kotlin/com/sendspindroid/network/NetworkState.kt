@@ -13,7 +13,12 @@ data class NetworkState(
     val wifiFrequencyMhz: Int? = null,
     val cellularType: CellularType? = null,
     val quality: NetworkQuality = NetworkQuality.UNKNOWN,
-    val timestampMs: Long = Platform.currentTimeMillis()
+    val timestampMs: Long = Platform.currentTimeMillis(),
+    /**
+     * Whether traffic goes over mobile data: a cellular network, or a VPN
+     * running over one. False for Wi-Fi and Ethernet, and while unknown.
+     */
+    val onMobileData: Boolean = false,
 ) {
     fun toLogString(): String {
         return when (transportType) {

@@ -200,6 +200,36 @@ class SyncAudioPlayerLoopTest {
         sink.writes.drop(writeIndex).map { tagOf(it.snapshotFirstBytes) }.filter { it != 0 }
 
     // ========================================================================
+    // A bit-perfect output gets its gain and mutes on the samples
+    // ========================================================================
+
+    @Test
+    fun `on a bit-perfect output the gain and the mutes go on the samples, and the track stays at unity`() {
+        player.useBitPerfectOutput()
+        player.setVolume(0.5f)
+        assertEquals("Android applies no volume there, so the track is left alone", 1f, sink.volume)
+
+        // Both 16-bit samples of each frame are 100
+        queueStream(nowUs + 400_000L, count = 400, tag = 0x0064_0064)
+        tickUntilPlaying()
+        repeat(10) { tick() }
+        assertEquals("halved on the way out", setOf(0x0032_0032), audioTagsWrittenSince(0).toSet())
+
+        player.setMuted(SyncAudioPlayer.MuteReason.PLAYER, true)
+        val muted = sink.writes.size
+        repeat(10) { tick() }
+        assertTrue("written, but as silence", sink.writes.size > muted)
+        assertEquals(emptyList<Int>(), audioTagsWrittenSince(muted))
+        assertEquals(1f, sink.volume)
+
+        player.setMuted(SyncAudioPlayer.MuteReason.PLAYER, false)
+        player.setVolume(1f)
+        val full = sink.writes.size
+        repeat(10) { tick() }
+        assertEquals("untouched at full volume", setOf(0x0064_0064), audioTagsWrittenSince(full).toSet())
+    }
+
+    // ========================================================================
     // Pause leaves the track to the audio thread
     // ========================================================================
 

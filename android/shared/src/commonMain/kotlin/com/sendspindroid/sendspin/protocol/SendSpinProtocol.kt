@@ -86,10 +86,11 @@ object SendSpinProtocol {
          * is what the player is willing to try, not what it advertises: the
          * Android player probes the device's audio output (and, for FLAC, its
          * decoder) and offers the server only the rates that probe accepts.
-         * The server picks the first entry in the advertised list it can
-         * serve, so the highest accepted rate wins. [SAMPLE_RATE] is never
-         * filtered out and stays as the fallback every server can serve. Opus
-         * is always advertised at [SAMPLE_RATE] only, as it is a 48 kHz codec.
+         * They are listed after the quality ladder at [SAMPLE_RATE], which
+         * the server picks from first, so nothing selects them yet.
+         * [SAMPLE_RATE] is never filtered out and stays as the fallback every
+         * server can serve. Opus is always advertised at [SAMPLE_RATE] only,
+         * as it is a 48 kHz codec.
          *
          * Buffers are capped in bytes (see [Buffer]), so a very high rate
          * holds fewer seconds of audio rather than more memory.

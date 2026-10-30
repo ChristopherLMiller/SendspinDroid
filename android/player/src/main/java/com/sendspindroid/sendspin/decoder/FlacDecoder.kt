@@ -1,5 +1,6 @@
 package com.sendspindroid.sendspin.decoder
 
+import android.media.AudioFormat
 import android.media.MediaFormat
 import android.util.Log
 import java.nio.ByteBuffer
@@ -43,6 +44,13 @@ class FlacDecoder : MediaCodecDecoder(MediaFormat.MIMETYPE_AUDIO_FLAC) {
             // Some servers may not send codec_header - MediaCodec may still work
             // if it can parse the STREAMINFO from the first frame
             Log.w(TAG, "No codec_header provided for FLAC - decoder may fail")
+        }
+        // The platform decoders put out 16-bit PCM unless asked for float,
+        // which keeps every bit of a deeper stream. FLAC above 16-bit is only
+        // advertised where the decoder takes the request
+        // (AudioDecoderFactory.isHighResFlacDecodeSupported).
+        if (bitDepth > 16) {
+            format.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_FLOAT)
         }
     }
 

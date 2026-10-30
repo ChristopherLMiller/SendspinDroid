@@ -119,6 +119,15 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             streamSampleRate = bundle.getInt("stream_sample_rate", 0),
             streamBitDepth = bundle.getInt("stream_bit_depth", 0),
             streamChannels = bundle.getInt("stream_channels", 0),
+            requestedCodec = bundle.getString("requested_codec", null),
+            requestedSampleRate = bundle.getInt("requested_sample_rate", 0),
+            requestedBitDepth = bundle.getInt("requested_bit_depth", 0),
+            audioQuality = bundle.getString("audio_quality", null),
+            audioQualityMobileData = bundle.getBoolean("audio_quality_mobile_data", false),
+            bitPerfectUsb = bundle.getBoolean("bit_perfect_usb", false),
+            outputBitPerfect = bundle.getBoolean("output_bit_perfect", false),
+            outputSampleRate = bundle.getInt("output_sample_rate", 0),
+            outputBitDepth = bundle.getInt("output_bit_depth", 0),
             activeRoles = bundle.getString("active_roles", "").split(',').filter { it.isNotEmpty() },
             pskCategory = bundle.getString("psk_category", null),
             minBufferMs = bundle.getInt("min_buffer_ms", 0),
@@ -177,6 +186,9 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             overlapTrimmedMs = bundle.getLong("overlap_trimmed_ms", 0L),
 
             handoffEpisodes = bundle.getString("handoff_episodes", null),
+            codecChanges = bundle.getString("codec_changes", null),
+            codecUpgrades = bundle.getInt("codec_upgrades", 0),
+            codecDowngrades = bundle.getInt("codec_downgrades", 0),
         )
     }
 
@@ -205,6 +217,18 @@ data class StatsState(
     val streamSampleRate: Int = 0,
     val streamBitDepth: Int = 0,
     val streamChannels: Int = 0,
+    /** The format the connection asks the server for; null before its client/hello. */
+    val requestedCodec: String? = null,
+    val requestedSampleRate: Int = 0,
+    val requestedBitDepth: Int = 0,
+    /** The AudioQuality name the request comes from, and whether it is the mobile data one. */
+    val audioQuality: String? = null,
+    val audioQualityMobileData: Boolean = false,
+    /** Bit-perfect USB output is on, and whether the output heard is, at what format. */
+    val bitPerfectUsb: Boolean = false,
+    val outputBitPerfect: Boolean = false,
+    val outputSampleRate: Int = 0,
+    val outputBitDepth: Int = 0,
     val activeRoles: List<String> = emptyList(),
     /** Name of the PskCategory that admitted the connection, or null. */
     val pskCategory: String? = null,
@@ -265,6 +289,11 @@ data class StatsState(
 
     // Newline-delimited reconnect-episode summary from the recorder.
     val handoffEpisodes: String? = null,
+
+    // Newline-delimited codec-change summary, and the counts since the service started.
+    val codecChanges: String? = null,
+    val codecUpgrades: Int = 0,
+    val codecDowngrades: Int = 0,
 ) {
     val syncErrorMs: Double get() = syncErrorUs / 1000.0
     val smoothedSyncErrorMs: Double get() = smoothedSyncErrorUs / 1000.0

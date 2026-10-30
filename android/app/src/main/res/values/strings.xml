@@ -6,6 +6,11 @@
     <string name="track_position">Track position</string>
     <string name="group_label">Group: %s</string>
     <string name="album_artist_label">Album artist: %s</string>
+    <!-- The stream being played: codec, bit depth, sample rate. "FLAC 24-bit / 48 kHz" -->
+    <string name="stream_format_label">%1$s %2$d-bit / %3$s kHz</string>
+    <string name="stream_format_description">Stream format: %1$s</string>
+    <!-- The stream's format when it goes to a USB DAC untouched -->
+    <string name="stream_format_bit_perfect">%1$s, bit-perfect</string>
     <string name="connected">Connected</string>
     <string name="server_address">Server Address</string>
     <string name="album_art">Album artwork</string>
@@ -56,6 +61,9 @@
     <string name="stats_section_correction">CORRECTION</string>
     <string name="stats_section_protocol">PROTOCOL</string>
     <string name="stats_section_reconnects">RECONNECTS</string>
+    <string name="stats_section_codec_changes">CODEC CHANGES</string>
+    <string name="stats_codec_upgrades_downgrades">Upgrades / downgrades</string>
+    <string name="stats_codec_changes_note">Up or down the quality ladder: Opus, FLAC 16, FLAC 24, PCM 16, 24, 32. Newest first.</string>
     <string name="stats_summary_not_connected">Not connected</string>
     <string name="stats_summary_settling">Settling</string>
     <string name="stats_summary_in_sync">In sync</string>
@@ -94,6 +102,14 @@
     <string name="stats_encryption_unpaired">Encrypted, not paired</string>
     <string name="stats_roles">Roles</string>
     <string name="stats_stream">Stream</string>
+    <string name="stats_asked_for">Asked for</string>
+    <!-- How a quality was chosen: %1$s the quality (Low, Normal, High), %2$s the network -->
+    <string name="stats_asked_for_reason">%1$s on %2$s</string>
+    <string name="stats_network_wifi">Wi-Fi</string>
+    <string name="stats_network_mobile_data">mobile data</string>
+    <string name="stats_output">Output</string>
+    <string name="stats_output_bit_perfect">Bit-perfect, %1$s kHz %2$d-bit</string>
+    <string name="stats_output_mixer">Android mixer</string>
     <string name="stats_last_message">Last message</string>
 
     <!-- Stats sections -->
@@ -138,8 +154,22 @@
     <string name="pref_sync_offset_title">Manual Sync Offset</string>
     <string name="pref_sync_offset_summary">Adjust timing: positive delays playback, negative advances it</string>
     <string name="pref_sync_offset_dialog_title">Sync Offset (ms)</string>
-    <string name="pref_codec_title">Preferred Audio Codec</string>
-    <string name="pref_codec_unavailable_hint">Not available on this device</string>
+    <string name="pref_category_audio_quality">Audio Quality</string>
+    <string name="pref_audio_quality_wifi_title">On Wi-Fi</string>
+    <string name="pref_audio_quality_wifi_summary">Also used on Ethernet. Low is Opus, Normal is FLAC, High is PCM.</string>
+    <string name="pref_audio_quality_mobile_title">On mobile data</string>
+    <string name="pref_audio_quality_mobile_summary">Higher quality uses more of your data plan.</string>
+    <string name="pref_audio_quality_low">Low</string>
+    <string name="pref_audio_quality_normal">Normal</string>
+    <string name="pref_audio_quality_high">High</string>
+    <!-- What a quality comes to on this device: %1$s is one of the audio_quality_step strings -->
+    <string name="pref_audio_quality_on_device">On this device: %1$s</string>
+    <string name="pref_audio_quality_on_device_closest">On this device: %1$s, the closest it plays</string>
+    <string name="audio_quality_step_opus">Opus, lossy</string>
+    <string name="audio_quality_step_flac">FLAC %1$d-bit, lossless</string>
+    <string name="audio_quality_step_pcm">PCM %1$d-bit, uncompressed</string>
+    <string name="pref_bit_perfect_usb_title">Bit-perfect USB output</string>
+    <string name="pref_bit_perfect_usb_summary">Sends audio to a USB DAC untouched, at the stream\'s own sample rate and bit depth, where the DAC supports them. Android sets no volume then: at full volume nothing is changed, below it the app lowers the level itself.</string>
 
     <!-- Switch Server dialog (was Disconnect dialog) -->
     <string name="disconnect_dialog_title">Switch Server?</string>

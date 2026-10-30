@@ -2,6 +2,8 @@ package com.sendspindroid.sendspin.protocol.message
 
 import com.sendspindroid.sendspin.crypto.Base64Url
 import com.sendspindroid.sendspin.protocol.GoodbyeReason
+import com.sendspindroid.sendspin.protocol.QualityLadder
+import com.sendspindroid.sendspin.protocol.QualityStep
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -432,92 +434,57 @@ object MessageBuilder {
     /**
      * Build the supported_formats list for the client/hello message.
      *
-     * The advertised list never contains a codec other than [preferredCodec] or
-     * `"pcm"`, and when both are present the preferred codec appears first
-     * (each in stereo at the appropriate bit depths). Edge cases:
-     * - If [preferredCodec] is not supported on this device, it is silently dropped
-     *   and only PCM is advertised. The Settings UI surfaces supported codecs
-     *   explicitly; this fallback exists so a connection can still succeed even
-     *   if support state was stale at the time the preference was set.
-     * - If [preferredCodec] is `"pcm"`, PCM is advertised once (not twice).
-     * - If neither the preferred codec nor PCM is supported (shouldn't happen on
-     *   any real Android device; PCM is always supported), the list is empty.
+     * [steps] is the quality ladder in the order to offer it, the preferred
+     * step first (see [QualityLadder.offerOrder]). Each step is advertised at
+     * [SendSpinProtocol.AudioFormat.SAMPLE_RATE] in that order, so a server
+     * that takes the first entry it can produce streams the preferred step,
+     * and one that cannot comes down the ladder before it goes up. Every step
+     * the device plays is listed, so `format` in client/state can move the
+     * stream to any of them during the connection: the preference "MUST be
+     * one of the entries in `supported_formats`", and client/hello is sent
+     * once per connection.
      *
-     * Compressed codecs (FLAC, Opus) are always advertised at 16-bit. PCM is
-     * advertised at every entry in [supportedBitDepths], highest first (so the
-     * server picks the best-quality match).
+     * After those, FLAC and PCM steps are also advertised at the other rates
+     * in [supportedSampleRates], highest first, where [isFormatSupported]
+     * accepts the codec / rate / bit depth combination. Opus is a 48 kHz
+     * codec and stays at the default rate. Entries at the default rate are
+     * never put to [isFormatSupported]: [steps] already holds only what the
+     * device plays there.
      *
-     * PCM and FLAC are advertised at every entry in [supportedSampleRates],
-     * highest first, with the bit depths nested inside each rate. Opus is a
-     * 48 kHz codec and is only ever advertised at
-     * [SendSpinProtocol.AudioFormat.SAMPLE_RATE]. An empty
-     * [supportedSampleRates] falls back to that same single rate.
-     *
-     * [isFormatSupported] is asked about every entry at a rate other than
-     * [SendSpinProtocol.AudioFormat.SAMPLE_RATE] and drops the ones it
-     * rejects, so the device can veto a codec / rate / bit depth combination
-     * it cannot play. Entries at the default rate are never put to it: they
-     * are the fallback that keeps a connection possible, and their bit depths
-     * are already chosen through [supportedBitDepths].
+     * Stereo only. A change of channel count needs a new AudioTrack, so it
+     * cannot be made without a gap: "A player that cannot switch its output
+     * between the formats it lists without a gap SHOULD list a single
+     * sample_rate and channels" (roles/player/v1.md). The server mixes a mono
+     * source up for us.
      */
     fun buildSupportedFormats(
-        preferredCodec: String,
-        isCodecSupported: (String) -> Boolean,
-        supportedBitDepths: List<Int> = listOf(SendSpinProtocol.AudioFormat.BIT_DEPTH),
+        steps: List<QualityStep>,
         supportedSampleRates: List<Int> = listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE),
         isFormatSupported: (codec: String, sampleRate: Int, bitDepth: Int) -> Boolean =
             { _, _, _ -> true }
     ): List<FormatEntry> {
-        val codecOrder = mutableListOf<String>()
-
-        if (preferredCodec != "pcm" && isCodecSupported(preferredCodec)) {
-            codecOrder.add(preferredCodec)
-        }
-
-        if (isCodecSupported("pcm")) {
-            codecOrder.add("pcm")
-        }
-
+        val defaultRate = SendSpinProtocol.AudioFormat.SAMPLE_RATE
+        val otherRates = supportedSampleRates.distinct().filter { it != defaultRate }.sortedDescending()
+        val distinctSteps = steps.distinct()
         return buildList {
-            for (codec in codecOrder) {
-                // Higher bit depths only apply to PCM; compressed codecs
-                // (FLAC, Opus) decode to 16-bit PCM regardless of source depth.
-                val depths = if (codec == "pcm") {
-                    supportedBitDepths.sortedDescending()
-                } else {
-                    listOf(SendSpinProtocol.AudioFormat.BIT_DEPTH)
-                }
-                // Opus is a 48 kHz codec, so it never leaves the default rate.
-                val rates = if (codec == "opus") {
-                    listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE)
-                } else {
-                    supportedSampleRates
-                        .ifEmpty { listOf(SendSpinProtocol.AudioFormat.SAMPLE_RATE) }
-                        .distinct()
-                        .sortedDescending()
-                }
-                for (sampleRate in rates) {
-                    for (bitDepth in depths) {
-                        if (sampleRate != SendSpinProtocol.AudioFormat.SAMPLE_RATE &&
-                            !isFormatSupported(codec, sampleRate, bitDepth)
-                        ) {
-                            continue
-                        }
-                        // Stereo only. A change of channel count needs a new
-                        // AudioTrack, so it cannot be made without a gap: "A
-                        // player that cannot switch its output between the
-                        // formats it lists without a gap SHOULD list a single
-                        // sample_rate and channels" (roles/player/v1.md). The
-                        // server mixes a mono source up for us.
-                        add(FormatEntry(
-                            codec = codec,
-                            sampleRate = sampleRate,
-                            channels = SendSpinProtocol.AudioFormat.CHANNELS,
-                            bitDepth = bitDepth
-                        ))
+            for (step in distinctSteps) {
+                add(entry(step.codec, defaultRate, step.bitDepth))
+            }
+            for (step in distinctSteps) {
+                if (step.codec == "opus") continue
+                for (rate in otherRates) {
+                    if (isFormatSupported(step.codec, rate, step.bitDepth)) {
+                        add(entry(step.codec, rate, step.bitDepth))
                     }
                 }
             }
         }
     }
+
+    private fun entry(codec: String, sampleRate: Int, bitDepth: Int) = FormatEntry(
+        codec = codec,
+        sampleRate = sampleRate,
+        channels = SendSpinProtocol.AudioFormat.CHANNELS,
+        bitDepth = bitDepth
+    )
 }

@@ -1,9 +1,11 @@
 package com.sendspindroid.sendspin
 
+import com.sendspindroid.sendspin.audio.BitPerfectFormats
 import com.sendspindroid.sendspin.crypto.ClientIdentity
 import com.sendspindroid.sendspin.crypto.PairingConfigStore
 import com.sendspindroid.sendspin.crypto.TrustStore
 import com.sendspindroid.sendspin.pairing.PairingOutcome
+import com.sendspindroid.sendspin.protocol.AudioQuality
 
 /**
  * What a [SendSpin] client needs from the app it runs in: the settings it
@@ -25,8 +27,23 @@ interface SendSpinHost {
     /** List `color@v1` in `client/hello`, for the server's colors for the current audio. */
     val serverColors: Boolean
 
-    /** The codec to list first in `client/hello`. */
-    fun preferredCodec(): String
+    /**
+     * Whether a connection made now runs over mobile data. Read once per
+     * connection, when its `client/hello` is sent: a connection stays on the
+     * network it was opened on.
+     */
+    fun onMobileData(): Boolean
+
+    /** The quality the user chose for mobile data, or for Wi-Fi and every other network. */
+    fun audioQuality(mobileData: Boolean): AudioQuality
+
+    /**
+     * The formats the output plays bit-perfect, while bit-perfect output is
+     * on and the device media plays on offers it; null otherwise. Read for
+     * each `client/hello`, which then offers rates other than the default
+     * only where they play bit-perfect.
+     */
+    fun bitPerfectFormats(): BitPerfectFormats? = null
 
     /** Delay beyond the audio port, as last set by a server. */
     fun outputDelayMs(): Int

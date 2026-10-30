@@ -55,6 +55,7 @@ import com.sendspindroid.coordinator.FailureReason
 import com.sendspindroid.coordinator.InboundConnections
 import com.sendspindroid.coordinator.ReconnectStatus
 import com.sendspindroid.coordinator.TransportState
+import com.sendspindroid.diagnostics.CodecChangeRecorder
 import com.sendspindroid.diagnostics.HandoffEpisodeRecorder
 import com.sendspindroid.diagnostics.Telemetry
 import com.sendspindroid.logging.AppLog
@@ -68,6 +69,7 @@ import com.sendspindroid.sendspin.pairing.PairedServers
 import com.sendspindroid.sendspin.pairing.PairingCodeFormat
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import com.sendspindroid.sendspin.protocol.ColorState
+import com.sendspindroid.sendspin.protocol.StreamFormat
 import com.sendspindroid.sendspin.protocol.TrackMetadata
 import com.sendspindroid.sendspin.SendSpinEndpoint
 import com.sendspindroid.discovery.DiscoveryGate
@@ -77,8 +79,11 @@ import com.sendspindroid.sendspin.transport.SendspinWebSocketServer
 import com.sendspindroid.UnifiedServerRepository
 import com.sendspindroid.UserSettings
 import com.sendspindroid.sendspin.SyncAudioPlayer
+import com.sendspindroid.sendspin.audio.BitPerfectFormats
+import com.sendspindroid.sendspin.audio.OutputPreparer
+import com.sendspindroid.sendspin.audio.OutputSetup
+import com.sendspindroid.sendspin.audio.UsbBitPerfect
 import com.sendspindroid.sendspin.PlaybackState as SyncPlaybackState
-import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import com.sendspindroid.network.ConnectionSelector
 import com.sendspindroid.network.NetworkEvaluator
 import com.sendspindroid.network.NetworkState
@@ -136,7 +141,7 @@ class PlaybackService : MediaLibraryService() {
     // The client every connection this service dials is made on.
     private var dialClient: SendSpin? = null
     // Decoding and the audio output, fed by the client being played from.
-    private val engine = SendSpinEngine(
+    private val engine: SendSpinEngine = SendSpinEngine(
         listener = object : SendSpinEngine.Listener {
             override fun onStreamStarted() {
                 // Acquire playback locks (CPU/WiFi) to prevent sleep during streaming
@@ -149,6 +154,7 @@ class PlaybackService : MediaLibraryService() {
 
             override fun onPlayerChanged(player: SyncAudioPlayer?) {
                 sendSpinPlayer?.setSyncAudioPlayer(player)
+                onOutputBitPerfect(engine.bitPerfect)
             }
 
             @OptIn(UnstableApi::class)
@@ -163,7 +169,15 @@ class PlaybackService : MediaLibraryService() {
         // asynchronous ones, which overtake mainHandler's (onStateChanged's
         // pause, say) while a frame barrier is pending.
         mainDispatcher = Handler(Looper.getMainLooper()).asCoroutineDispatcher(),
+        prepareOutput = OutputPreparer { sampleRate, channels, bitDepth -> outputFor(sampleRate, channels, bitDepth) },
     )
+
+    // Bit-perfect output to a USB DAC (Android 14+), while the setting is on
+    private var usbBitPerfect: UsbBitPerfect? = null
+
+    // Whether the output being heard is bit-perfect: Android applies no volume
+    // to it, so the whole volume is the player's own gain. Main thread.
+    private var outputBitPerfect = false
 
     // Active server as a flow, consumed by ConnectionCoordinator.
     private val _currentServerFlow = MutableStateFlow<UnifiedServer?>(null)
@@ -176,6 +190,10 @@ class PlaybackService : MediaLibraryService() {
     private val handoffRecorder = HandoffEpisodeRecorder().apply {
         onEpisodeClosed = { episode -> Telemetry.submit(episode) }
     }
+
+    // Records the stream's format changes, up or down the quality ladder,
+    // surfaced in getStats() / bug reports beside the handoff episodes.
+    private val codecChangeRecorder = CodecChangeRecorder()
 
     // mDNS discovery for Android Auto browse tree
     private var browseDiscoveryManager: NsdDiscoveryManager? = null
@@ -237,19 +255,25 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    // BroadcastReceiver for preferred codec changes from settings: report the
-    // new preference as `format` in client/state instead of waiting for the
-    // next connect. The server replies with stream/start, which flows through
-    // the normal format-change reconfiguration path.
-    private val preferredCodecReceiver = object : BroadcastReceiver() {
+    // BroadcastReceiver for audio quality changes from settings: the client
+    // asks for the format the new quality comes to at once, by connecting
+    // again when it is in another codec, else with `format` in client/state
+    // (see SendSpin.onAudioQualityChanged).
+    private val audioQualityReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val codec = intent.getStringExtra(SettingsViewModel.EXTRA_PREFERRED_CODEC) ?: return
-            if (!AudioDecoderFactory.isCodecSupported(codec)) {
-                Log.w(TAG, "Preferred codec changed to unsupported '$codec' - not requesting")
-                return
-            }
-            Log.i(TAG, "Preferred codec changed: $codec - reporting the new format preference")
-            sendSpinClient?.setPreferredCodec(codec)
+            Log.i(TAG, "Audio quality changed: Wi-Fi ${UserSettings.wifiAudioQuality}, " +
+                "mobile data ${UserSettings.mobileAudioQuality}")
+            sendSpinClient?.onAudioQualityChanged()
+        }
+    }
+
+    // Bit-perfect USB output was turned on or off in settings: the hello
+    // offers other rates, so a live connection is made again.
+    private val bitPerfectUsbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            Log.i(TAG, "Bit-perfect USB output: ${UserSettings.bitPerfectUsb}")
+            if (!UserSettings.bitPerfectUsb) usbBitPerfect?.clear()
+            refreshBitPerfectFormats()
         }
     }
 
@@ -446,6 +470,20 @@ class PlaybackService : MediaLibraryService() {
         // In-process, like the artist image: only the activity reads them.
         private val _serverColors = MutableStateFlow<ColorState?>(null)
         val serverColors: StateFlow<ColorState?> = _serverColors.asStateFlow()
+
+        // The format of the stream being played, or of the last one while the
+        // connection lasts, for Now Playing. In-process, like the colors.
+        private val _streamFormat = MutableStateFlow<StreamFormat?>(null)
+        val streamFormat: StateFlow<StreamFormat?> = _streamFormat.asStateFlow()
+
+        // Whether the output being heard passes the audio to a USB DAC untouched.
+        private val _outputBitPerfect = MutableStateFlow(false)
+        val outputBitPerfect: StateFlow<Boolean> = _outputBitPerfect.asStateFlow()
+
+        // What media's USB DAC plays bit-perfect while bit-perfect output is on,
+        // null otherwise: read by AppSendSpinHost for each client/hello.
+        private val _bitPerfectFormats = MutableStateFlow<BitPerfectFormats?>(null)
+        val bitPerfectFormats: StateFlow<BitPerfectFormats?> = _bitPerfectFormats.asStateFlow()
 
         private const val TAG = "PlaybackService"
 
@@ -671,14 +709,18 @@ class PlaybackService : MediaLibraryService() {
             IntentFilter(SettingsViewModel.ACTION_HIGH_POWER_MODE_CHANGED)
         )
 
-        // Register receiver for preferred codec changes from settings
+        // Register receiver for audio quality changes from settings
         LocalBroadcastManager.getInstance(this).registerReceiver(
-            preferredCodecReceiver,
-            IntentFilter(SettingsViewModel.ACTION_PREFERRED_CODEC_CHANGED)
+            audioQualityReceiver,
+            IntentFilter(SettingsViewModel.ACTION_AUDIO_QUALITY_CHANGED)
         )
         LocalBroadcastManager.getInstance(this).registerReceiver(
             playerNameReceiver,
             IntentFilter(SettingsViewModel.ACTION_PLAYER_NAME_CHANGED)
+        )
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+            bitPerfectUsbReceiver,
+            IntentFilter(SettingsViewModel.ACTION_BIT_PERFECT_USB_CHANGED)
         )
 
         // Initialize Coil ImageLoader for artwork fetching (skip in low memory mode)
@@ -912,6 +954,7 @@ class PlaybackService : MediaLibraryService() {
                 _playbackState.value = _playbackState.value.withConnectionEnded()
                 _artistArtwork.value = null
                 _serverColors.value = null
+                _streamFormat.value = null
                 lastArtworkUrl = null
                 lastTrackTitle = null
                 urlArtwork = null
@@ -1162,6 +1205,11 @@ class PlaybackService : MediaLibraryService() {
         // A new output brings its own stored index and its own volume curve,
         // without any setting being written: report what plays now.
         audioManager?.registerAudioDeviceCallback(outputDeviceCallback, mainHandler)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            usbBitPerfect = audioManager?.let { UsbBitPerfect(it) }
+            refreshBitPerfectFormats()
+        }
 
         Log.d(TAG, "Volume control initialized - using device STREAM_MUSIC")
     }
@@ -1481,8 +1529,17 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
-        override fun onStreamStart(codec: String, sampleRate: Int, channels: Int, bitDepth: Int, codecHeader: ByteArray?) =
+        override fun onStreamStart(codec: String, sampleRate: Int, channels: Int, bitDepth: Int, codecHeader: ByteArray?) {
+            val format = StreamFormat(codec, sampleRate, channels, bitDepth)
+            codecChangeRecorder.onStreamStart(
+                format,
+                midStream = engine.activeStream != null,
+                network = coordinator.networkState.value.transportType.name,
+                asked = askedLabel(sendSpinClient),
+            )
+            _streamFormat.value = format
             engine.onStreamStart(codec, sampleRate, channels, bitDepth, codecHeader)
+        }
 
         override fun onStreamClear() = engine.onStreamClear()
 
@@ -2123,6 +2180,14 @@ class PlaybackService : MediaLibraryService() {
         // the index is read back.
         val applied = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         when {
+            engine.bitPerfect -> {
+                // Android applies neither the index nor the track's volume to
+                // a bit-perfect output: the whole volume is the player's own
+                // gain. The index follows it all the same, for the keys.
+                Log.d(TAG, "Bit-perfect output: volume $percent as the player's gain")
+                lastKnownVolume = applied
+                engine.setTrackGain(VolumeLaw.amplitude(percent))
+            }
             VolumeLaw.isFullVolumeSet(output in fullVolumeOutputs, newVolume, applied, maxVolume) -> {
                 // The index stays at max: the whole volume is track gain, as
                 // on a fixed-volume output, and the volume asked for plays.
@@ -2225,8 +2290,10 @@ class PlaybackService : MediaLibraryService() {
     private fun syncDeviceVolumeToServer(index: Int) {
         val am = audioManager ?: return
         lastKnownVolume = index
-        engine.setTrackGain(1f)
         val volumePercent = deviceVolumePercent(am, index)
+        // The index carries the volume, except on a bit-perfect output, which
+        // Android applies none to: there the player's gain carries all of it
+        engine.setTrackGain(if (engine.bitPerfect) VolumeLaw.amplitude(volumePercent) else 1f)
         Log.d(TAG, "Device volume index $index is volume $volumePercent")
 
         // Sync to server (for multi-client coordination)
@@ -2240,12 +2307,60 @@ class PlaybackService : MediaLibraryService() {
     /** Media may have moved to another output, with its own index and curve. */
     private val outputDeviceCallback = object : android.media.AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>) {
-            if (addedDevices.any { it.isSink }) scheduleOutputVolumeSync()
+            if (addedDevices.any { it.isSink }) onOutputDevicesChanged()
         }
 
         override fun onAudioDevicesRemoved(removedDevices: Array<out android.media.AudioDeviceInfo>) {
-            if (removedDevices.any { it.isSink }) scheduleOutputVolumeSync()
+            if (removedDevices.any { it.isSink }) onOutputDevicesChanged()
         }
+    }
+
+    private fun onOutputDevicesChanged() {
+        scheduleOutputVolumeSync()
+        mainHandler.removeCallbacks(bitPerfectRefresh)
+        mainHandler.postDelayed(bitPerfectRefresh, OUTPUT_CHANGE_SETTLE_MS)
+    }
+
+    // A USB DAC plugged in or out, once routing has settled
+    private val bitPerfectRefresh = Runnable { refreshBitPerfectFormats() }
+
+    /**
+     * What media's USB DAC plays bit-perfect, while the setting is on, for
+     * the next client/hello. A connection whose hello offered other formats
+     * is made again (SendSpin.onOutputChanged). Main thread.
+     */
+    private fun refreshBitPerfectFormats() {
+        val formats = usbBitPerfect?.takeIf { UserSettings.bitPerfectUsb }?.formats()?.takeUnless { it.isEmpty() }
+        if (formats == _bitPerfectFormats.value) return
+        Log.i(TAG, "Bit-perfect USB formats: ${formats?.formats?.sortedBy { it.first } ?: "none"}")
+        _bitPerfectFormats.value = formats
+        sendSpinClient?.onOutputChanged()
+    }
+
+    /**
+     * The output for a player's PCM format: bit-perfect on a USB DAC that
+     * takes it while the setting is on, else the mixer. Main thread.
+     */
+    private fun outputFor(sampleRate: Int, channels: Int, bitDepth: Int): OutputSetup {
+        val bitPerfect = usbBitPerfect
+        if (bitPerfect == null || !UserSettings.bitPerfectUsb) {
+            bitPerfect?.clear()
+            return OutputSetup(bitDepth)
+        }
+        return bitPerfect.prepare(sampleRate, channels, bitDepth)
+    }
+
+    /**
+     * The output being heard is bit-perfect, or no longer is. Android applies
+     * no volume to a bit-perfect one, so the volume is set again, the whole of
+     * it as the player's gain or back on the device's index. Main thread.
+     */
+    private fun onOutputBitPerfect(bitPerfect: Boolean) {
+        _outputBitPerfect.value = bitPerfect
+        if (bitPerfect == outputBitPerfect) return
+        outputBitPerfect = bitPerfect
+        Log.i(TAG, "Output ${if (bitPerfect) "is" else "is no longer"} bit-perfect: setting the volume again")
+        setVolume(_playbackState.value.volume / 100f)
     }
 
     // Routing settles a moment after the device callback. Any sink counts
@@ -3237,6 +3352,15 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
+     * What [client]'s connection asks for, as "FLAC_24 (NORMAL on Wi-Fi)",
+     * for a codec-change record. Null before its client/hello.
+     */
+    private fun askedLabel(client: SendSpin?): String? {
+        val choice = client?.qualityChoice ?: return null
+        return "${choice.step} (${choice.quality} on ${if (choice.mobileData) "mobile data" else "Wi-Fi"})"
+    }
+
+    /**
      * Collects current stats from SyncAudioPlayer and SendSpin.
      * Returns a Bundle containing all stats for Stats for Nerds display.
      */
@@ -3287,6 +3411,23 @@ class PlaybackService : MediaLibraryService() {
                 bundle.putInt("stream_bit_depth", stream.bitDepth)
                 bundle.putInt("stream_channels", stream.channels)
             }
+            // What the connection asks the server for, and why
+            protocol.requestedFormat?.let { asked ->
+                bundle.putString("requested_codec", asked.codec.uppercase())
+                bundle.putInt("requested_sample_rate", asked.sampleRate)
+                bundle.putInt("requested_bit_depth", asked.bitDepth)
+            }
+            client.qualityChoice?.let { choice ->
+                bundle.putString("audio_quality", choice.quality.name)
+                bundle.putBoolean("audio_quality_mobile_data", choice.mobileData)
+            }
+            // Whether the audio reaches a USB DAC untouched, and in what format
+            bundle.putBoolean("bit_perfect_usb", UserSettings.bitPerfectUsb)
+            bundle.putBoolean("output_bit_perfect", engine.bitPerfect)
+            engine.hostPlayer?.takeIf { it.isBitPerfect }?.let { output ->
+                bundle.putInt("output_sample_rate", output.sampleRate)
+                bundle.putInt("output_bit_depth", output.bitDepth)
+            }
         } else {
             bundle.putString("connection_state", "Disconnected")
             bundle.putString("audio_codec", "--")
@@ -3294,6 +3435,10 @@ class PlaybackService : MediaLibraryService() {
 
         // Network-handoff episodes (drop + reconnect outcomes) for bug reports.
         bundle.putString("handoff_episodes", handoffRecorder.summary())
+        // The stream's format changes, up and down the quality ladder.
+        bundle.putString("codec_changes", codecChangeRecorder.summary())
+        bundle.putInt("codec_upgrades", codecChangeRecorder.upgrades)
+        bundle.putInt("codec_downgrades", codecChangeRecorder.downgrades)
 
         // Get stats from SyncAudioPlayer
         val audioStats = engine.player?.getStats()
@@ -3719,8 +3864,11 @@ class PlaybackService : MediaLibraryService() {
 
         // Unregister High Power Mode receiver and release locks
         LocalBroadcastManager.getInstance(this).unregisterReceiver(highPowerModeReceiver)
-        LocalBroadcastManager.getInstance(this).unregisterReceiver(preferredCodecReceiver)
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(audioQualityReceiver)
         LocalBroadcastManager.getInstance(this).unregisterReceiver(playerNameReceiver)
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(bitPerfectUsbReceiver)
+        // Media goes through the mixer again once this app is gone
+        usbBitPerfect?.clear()
         releaseHighPowerLocks()
 
         // Let the final releasePlaybackLocks() abandon focus even mid-interruption

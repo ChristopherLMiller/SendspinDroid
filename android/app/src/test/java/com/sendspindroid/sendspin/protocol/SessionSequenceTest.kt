@@ -98,12 +98,12 @@ class SessionSequenceTest {
     // ========== format preference ==========
 
     @Test
-    fun `a codec preference is reported as the matching advertised format`() {
+    fun `a format preference is reported as the matching advertised entry`() {
         handler.handleTextMessageForTest(serverHello)
         handler.handleTextMessageForTest(activate("", playerRoles))
         handler.sentMessages.clear()
 
-        handler.setPreferredCodec("pcm")
+        handler.setPreferredFormat("pcm", 16)
 
         val state = handler.sentMessages.single()
         assertTrue(state.contains("\"type\":\"client/state\""))
@@ -111,19 +111,50 @@ class SessionSequenceTest {
             state.contains("\"format\":{\"codec\":\"pcm\",\"sample_rate\":48000,\"channels\":2,\"bit_depth\":16}")
         )
         assertFalse("stream/request-format no longer exists", state.contains("request-format"))
+        assertEquals(MessageBuilder.FormatEntry("pcm", 48000, 2, 16), handler.requestedFormat)
     }
 
     @Test
-    fun `a codec this connection did not advertise is not reported`() {
+    fun `a format this connection did not advertise is not reported`() {
         // "format ... MUST be one of the entries in supported_formats", and
         // client/hello is sent once per connection.
         handler.handleTextMessageForTest(serverHello)
         handler.handleTextMessageForTest(activate("", playerRoles))
         handler.sentMessages.clear()
 
-        handler.setPreferredCodec("opus")
+        handler.setPreferredFormat("opus", 16)
+        handler.setPreferredFormat("pcm", 24)
 
         assertEquals(emptyList<String>(), handler.sentMessages)
+    }
+
+    @Test
+    fun `the format already asked for is not reported again`() {
+        handler.handleTextMessageForTest(serverHello)
+        handler.handleTextMessageForTest(activate("", playerRoles))
+        handler.sentMessages.clear()
+
+        // The hello's first entry is what the connection asks for already
+        handler.setPreferredFormat("flac", 16)
+        assertEquals(emptyList<String>(), handler.sentMessages)
+
+        handler.setPreferredFormat("pcm", 16)
+        handler.setPreferredFormat("pcm", 16)
+        assertEquals(1, handler.sentMessages.size)
+    }
+
+    @Test
+    fun `going back to the hello's first format is reported`() {
+        // The server holds the last preference reported, so it has to hear
+        // that the stream should return to the hello's order.
+        handler.handleTextMessageForTest(serverHello)
+        handler.handleTextMessageForTest(activate("", playerRoles))
+        handler.setPreferredFormat("pcm", 16)
+        handler.sentMessages.clear()
+
+        handler.setPreferredFormat("flac", 16)
+
+        assertTrue(handler.sentMessages.single().contains("\"format\":{\"codec\":\"flac\""))
     }
 
     @Test

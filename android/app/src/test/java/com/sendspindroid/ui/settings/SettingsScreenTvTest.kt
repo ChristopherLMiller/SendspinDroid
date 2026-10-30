@@ -4,23 +4,25 @@ import android.app.Application
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.InterceptPlatformTextInput
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.requestFocus
 import androidx.test.core.app.ApplicationProvider
+import com.sendspindroid.UserSettings
+import com.sendspindroid.sendspin.protocol.AudioQuality
 import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.theme.SendSpinTheme
@@ -45,8 +47,6 @@ class SettingsScreenTvTest {
     val composeTestRule = createComposeRule()
 
     private val viewModel = SettingsViewModel(ApplicationProvider.getApplicationContext<Application>())
-
-    private val radioButton = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.RadioButton)
 
     // Not hasSetTextAction(): on a TV the field is read-only until OK, which leaves out SetText.
     private val textField = SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText)
@@ -223,33 +223,39 @@ class SettingsScreenTvTest {
     }
 
     @Test
-    fun `on a TV the codec dialog opens on the selected codec`() {
-        show(FormFactor.TV)
-        composeTestRule.onNodeWithText("Preferred Audio Codec").performScrollTo().performClick()
+    fun `a quality pill saves the quality for its own network`() {
+        show(FormFactor.PHONE)
+        // Through the click action, as an accessibility service clicks: the
+        // end pills have rounded corners on one side only, which Compose
+        // hit-tests with Path.op, and Robolectric's graphics have no Path.op,
+        // so a touch on them lands nowhere here. The Wi-Fi row comes first.
+        fun pick(label: String, row: Int) {
+            composeTestRule.onAllNodesWithText(label)[row].performScrollTo()
+                .performSemanticsAction(SemanticsActions.OnClick)
+            composeTestRule.waitForIdle()
+        }
 
-        // The selected codec, or the first one this device can play if it cannot play that.
-        val supported = viewModel.supportedCodecs.value
-        val expected = viewModel.preferredCodec.value.takeIf { it in supported } ?: supported.first()
-        composeTestRule.onNode(radioButton and hasText(codecLabel(expected))).assertIsFocused()
+        pick("High", row = 0)
+        pick("Normal", row = 1)
+
+        assertEquals(AudioQuality.HIGH, viewModel.wifiAudioQuality.value)
+        assertEquals(AudioQuality.HIGH, UserSettings.wifiAudioQuality)
+        assertEquals(AudioQuality.NORMAL, viewModel.mobileAudioQuality.value)
+        assertEquals(AudioQuality.NORMAL, UserSettings.mobileAudioQuality)
+
+        pick("Low", row = 1)
+        assertEquals(AudioQuality.LOW, UserSettings.mobileAudioQuality)
+        // The other network's choice is left alone
+        assertEquals(AudioQuality.HIGH, UserSettings.wifiAudioQuality)
     }
 
     @Test
-    fun `each codec is one control, the row with its label`() {
-        show(FormFactor.PHONE)
-        composeTestRule.onNodeWithText("Preferred Audio Codec").performScrollTo().performClick()
+    fun `on a TV only the Wi-Fi quality is offered`() {
+        show(FormFactor.TV)
 
-        // A RadioButton with its own onClick would be a second radio node, without the label.
-        composeTestRule.onAllNodes(radioButton and SemanticsMatcher.keyNotDefined(SemanticsProperties.Text))
-            .assertCountEquals(0)
-        listOf("Opus", "FLAC", "PCM").forEach { label ->
-            composeTestRule.onAllNodes(radioButton and hasText(label)).assertCountEquals(1)
-        }
-    }
-
-    private fun codecLabel(codec: String) = when (codec) {
-        "opus" -> "Opus"
-        "flac" -> "FLAC"
-        else -> "PCM"
+        composeTestRule.onNodeWithText("On Wi-Fi").performScrollTo().assertExists()
+        composeTestRule.onAllNodesWithText("On mobile data").assertCountEquals(0)
+        composeTestRule.onAllNodesWithText("Preferred Audio Codec").assertCountEquals(0)
     }
 
     private companion object {

@@ -14,6 +14,7 @@ import com.sendspindroid.sendspin.crypto.ClientIdentity
 import com.sendspindroid.sendspin.crypto.AndroidPairingConfigStore
 import com.sendspindroid.sendspin.crypto.EncryptedPrefsTrustStore
 import com.sendspindroid.sendspin.crypto.TrustStore
+import com.sendspindroid.sendspin.protocol.AudioQuality
 
 /**
  * Centralized access to user settings stored in SharedPreferences.
@@ -51,12 +52,18 @@ object UserSettings {
      */
     private const val PLAIN_FALLBACK_PREFS_FILE = "sendspin_plain_prefs"
 
+    // The single codec setting the two audio qualities replaced. Only read,
+    // to carry a choice made there over to them.
+    private const val KEY_LEGACY_PREFERRED_CODEC = "preferred_codec"
+
     // Preference keys
     const val KEY_PLAYER_ID = "player_id"
     const val KEY_PLAYER_NAME = "player_name"
     const val KEY_SYNC_OFFSET_MS = "sync_offset_ms"
     const val KEY_LOW_MEMORY_MODE = "low_memory_mode"
-    const val KEY_PREFERRED_CODEC = "preferred_codec"
+    const val KEY_WIFI_AUDIO_QUALITY = "wifi_audio_quality"
+    const val KEY_MOBILE_AUDIO_QUALITY = "mobile_audio_quality"
+    const val KEY_BIT_PERFECT_USB = "bit_perfect_usb"
     const val KEY_FULL_SCREEN_MODE = "full_screen_mode"
     const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
     const val KEY_HIGH_POWER_MODE = "high_power_mode"
@@ -667,20 +674,49 @@ object UserSettings {
         set(value) { prefs?.edit()?.putBoolean(KEY_SERVER_COLORS, value)?.apply() }
 
     /**
-     * Gets the preferred audio codec for streaming.
-     * The server will be asked for this codec first; PCM is always used as fallback.
-     * Values: "opus" (default), "flac"
+     * The audio quality on Wi-Fi, and on Ethernet and any other network that
+     * is not mobile data. Normal (FLAC) unless set; a codec picked under the
+     * single setting this replaced carries over, see [legacyQuality].
      */
-    fun getPreferredCodec(): String {
-        return prefs?.getString(KEY_PREFERRED_CODEC, "opus") ?: "opus"
+    var wifiAudioQuality: AudioQuality
+        get() = readAudioQuality(KEY_WIFI_AUDIO_QUALITY, AudioQuality.NORMAL)
+        set(value) { prefs?.edit()?.putString(KEY_WIFI_AUDIO_QUALITY, value.name)?.apply() }
+
+    /** The audio quality on mobile data. Low (Opus) unless set; see [wifiAudioQuality]. */
+    var mobileAudioQuality: AudioQuality
+        get() = readAudioQuality(KEY_MOBILE_AUDIO_QUALITY, AudioQuality.LOW)
+        set(value) { prefs?.edit()?.putString(KEY_MOBILE_AUDIO_QUALITY, value.name)?.apply() }
+
+    /**
+     * Whether a USB DAC is played bit-perfect, where it offers that
+     * (Android 14+). Off unless set: Android then applies no volume, and the
+     * player scales the audio itself below full volume.
+     */
+    var bitPerfectUsb: Boolean
+        get() = prefs?.getBoolean(KEY_BIT_PERFECT_USB, false) ?: false
+        set(value) { prefs?.edit()?.putBoolean(KEY_BIT_PERFECT_USB, value)?.apply() }
+
+    /** The quality for mobile data, or for Wi-Fi and every other network. */
+    fun audioQuality(mobileData: Boolean): AudioQuality =
+        if (mobileData) mobileAudioQuality else wifiAudioQuality
+
+    private fun readAudioQuality(key: String, default: AudioQuality): AudioQuality {
+        val value = prefs?.getString(key, null)
+        return AudioQuality.entries.firstOrNull { it.name == value } ?: legacyQuality() ?: default
     }
 
     /**
-     * Sets the preferred audio codec for streaming.
+     * The quality of the codec picked under the old single setting, which
+     * applied on every network: so it does on both until one is changed.
+     * Null when none was picked, as the setting was written only by a pick.
      */
-    fun setPreferredCodec(codec: String) {
-        prefs?.edit()?.putString(KEY_PREFERRED_CODEC, codec)?.apply()
-    }
+    private fun legacyQuality(): AudioQuality? =
+        when (prefs?.getString(KEY_LEGACY_PREFERRED_CODEC, null)) {
+            "opus" -> AudioQuality.LOW
+            "flac" -> AudioQuality.NORMAL
+            "pcm" -> AudioQuality.HIGH
+            else -> null
+        }
 
     // ========== Testing Support ==========
 

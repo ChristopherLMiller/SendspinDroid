@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -32,7 +31,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -60,7 +58,6 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -68,11 +65,15 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.compose.ui.platform.LocalContext
 import com.sendspindroid.R
 import com.sendspindroid.UserSettings
 import com.sendspindroid.diagnostics.Telemetry
 import com.sendspindroid.logging.LogLevel
+import com.sendspindroid.sendspin.protocol.AudioQuality
+import com.sendspindroid.sendspin.protocol.QualityLadder
+import com.sendspindroid.sendspin.protocol.QualityStep
 import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.adaptive.TvInitialFocus
@@ -126,8 +127,10 @@ fun SettingsScreen(
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val serverColors by viewModel.serverColors.collectAsStateWithLifecycle()
     val syncOffset by viewModel.syncOffset.collectAsStateWithLifecycle()
-    val preferredCodec by viewModel.preferredCodec.collectAsStateWithLifecycle()
-    val supportedCodecs by viewModel.supportedCodecs.collectAsStateWithLifecycle()
+    val wifiAudioQuality by viewModel.wifiAudioQuality.collectAsStateWithLifecycle()
+    val mobileAudioQuality by viewModel.mobileAudioQuality.collectAsStateWithLifecycle()
+    val supportedQualitySteps by viewModel.supportedQualitySteps.collectAsStateWithLifecycle()
+    val bitPerfectUsb by viewModel.bitPerfectUsb.collectAsStateWithLifecycle()
     val lowMemoryMode by viewModel.lowMemoryMode.collectAsStateWithLifecycle()
     val highPowerMode by viewModel.highPowerMode.collectAsStateWithLifecycle()
     val autoStartOnBoot by viewModel.autoStartOnBoot.collectAsStateWithLifecycle()
@@ -141,7 +144,6 @@ fun SettingsScreen(
     var showPlayerNameDialog by remember { mutableStateOf(false) }
     var showSyncOffsetDialog by remember { mutableStateOf(false) }
     var showRestartDialog by remember { mutableStateOf(false) }
-    var showCodecDialog by remember { mutableStateOf(false) }
 
     val isTv = LocalFormFactor.current == FormFactor.TV
     val playerNameFocusRequester = remember { FocusRequester() }
@@ -263,11 +265,43 @@ fun SettingsScreen(
                 onIncrease = { viewModel.increaseSyncOffset() },
                 onValueClick = { showSyncOffsetDialog = true }
             )
-            CodecPreference(
-                title = stringResource(R.string.pref_codec_title),
-                summary = getCodecDisplayName(preferredCodec),
-                onClick = { showCodecDialog = true }
+
+            // Audio Quality Category: one choice per network, each the codec
+            // the stream asks for, as high in its bit depths as the device goes.
+            PreferenceCategory(title = stringResource(R.string.pref_category_audio_quality))
+            val qualityOptions = listOf(
+                stringResource(R.string.pref_audio_quality_low) to AudioQuality.LOW,
+                stringResource(R.string.pref_audio_quality_normal) to AudioQuality.NORMAL,
+                stringResource(R.string.pref_audio_quality_high) to AudioQuality.HIGH
             )
+            SegmentedButtonPreference(
+                title = stringResource(R.string.pref_audio_quality_wifi_title),
+                summary = stringResource(R.string.pref_audio_quality_wifi_summary),
+                options = qualityOptions,
+                selectedOption = wifiAudioQuality,
+                onOptionSelected = { viewModel.setWifiAudioQuality(it) },
+                footnote = qualityOnDevice(wifiAudioQuality, supportedQualitySteps)
+            )
+            // A TV has no mobile data to stream over.
+            if (!isTv) {
+                SegmentedButtonPreference(
+                    title = stringResource(R.string.pref_audio_quality_mobile_title),
+                    summary = stringResource(R.string.pref_audio_quality_mobile_summary),
+                    options = qualityOptions,
+                    selectedOption = mobileAudioQuality,
+                    onOptionSelected = { viewModel.setMobileAudioQuality(it) },
+                    footnote = qualityOnDevice(mobileAudioQuality, supportedQualitySteps)
+                )
+            }
+            // The platform's bit-perfect mixer arrived with Android 14
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                SwitchPreference(
+                    title = stringResource(R.string.pref_bit_perfect_usb_title),
+                    summary = stringResource(R.string.pref_bit_perfect_usb_summary),
+                    checked = bitPerfectUsb,
+                    onCheckedChange = { viewModel.setBitPerfectUsb(it) }
+                )
+            }
 
             // Performance Category
             PreferenceCategory(title = stringResource(R.string.pref_category_performance))
@@ -471,20 +505,6 @@ fun SettingsScreen(
                 onRestartApp()
             },
             onDismiss = { showRestartDialog = false }
-        )
-    }
-
-    // Codec Selection Dialog
-    if (showCodecDialog) {
-        CodecSelectionDialog(
-            title = stringResource(R.string.pref_codec_title),
-            currentCodec = preferredCodec,
-            supportedCodecs = supportedCodecs,
-            onSelect = { codec ->
-                viewModel.setPreferredCodec(codec)
-                showCodecDialog = false
-            },
-            onDismiss = { showCodecDialog = false }
         )
     }
 }
@@ -711,35 +731,6 @@ private fun TextPreference(
 }
 
 @Composable
-private fun CodecPreference(
-    title: String,
-    summary: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = summary,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
 private fun SyncOffsetPreference(
     offset: Int,
     onDecrease: () -> Unit,
@@ -859,6 +850,26 @@ private fun SyncOffsetPreference(
     }
 }
 
+/**
+ * What [quality] comes to on this device, from the ladder's steps it plays:
+ * "On this device: FLAC 24-bit, lossless". Null until those are known.
+ */
+@Composable
+private fun qualityOnDevice(quality: AudioQuality, supported: Set<QualityStep>?): String? {
+    val step = supported?.let { QualityLadder.resolve(quality, it) } ?: return null
+    val format = when (step.codec) {
+        "opus" -> stringResource(R.string.audio_quality_step_opus)
+        "flac" -> stringResource(R.string.audio_quality_step_flac, step.bitDepth)
+        else -> stringResource(R.string.audio_quality_step_pcm, step.bitDepth)
+    }
+    return stringResource(
+        // The quality's own codec, or the step this device plays instead
+        if (step.quality == quality) R.string.pref_audio_quality_on_device
+        else R.string.pref_audio_quality_on_device_closest,
+        format
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun <T> SegmentedButtonPreference(
@@ -867,7 +878,8 @@ private fun <T> SegmentedButtonPreference(
     options: List<Pair<String, T>>,
     selectedOption: T,
     onOptionSelected: (T) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    footnote: String? = null
 ) {
     Column(
         modifier = modifier
@@ -897,6 +909,14 @@ private fun <T> SegmentedButtonPreference(
                     Text(label)
                 }
             }
+        }
+        if (footnote != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = footnote,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -1040,87 +1060,6 @@ private fun RestartAppDialog(
     )
 }
 
-@Composable
-private fun CodecSelectionDialog(
-    title: String,
-    currentCodec: String,
-    supportedCodecs: Set<String>,
-    onSelect: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val codecs = listOf(
-        "opus" to "Opus",
-        "flac" to "FLAC",
-        "pcm" to "PCM"
-    )
-    val unavailableHint = stringResource(R.string.pref_codec_unavailable_hint)
-    // The selected codec, unless this device cannot play it: its row then
-    // cannot take focus, so the first one it can play does.
-    val focusedCodec = currentCodec.takeIf { it in supportedCodecs } ?: supportedCodecs.first()
-    val initialFocus = remember { FocusRequester() }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            TvInitialFocus(initialFocus)
-            Column {
-                codecs.forEach { (value, label) ->
-                    val supported = value in supportedCodecs
-                    // The row is the one control: a RadioButton with its own
-                    // onClick would be a second focus stop for the same choice.
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(
-                                if (value == focusedCodec) Modifier.focusRequester(initialFocus)
-                                else Modifier
-                            )
-                            .selectable(
-                                selected = currentCodec == value,
-                                enabled = supported,
-                                role = Role.RadioButton,
-                                onClick = { onSelect(value) }
-                            )
-                            .padding(vertical = 12.dp, horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = currentCodec == value,
-                            onClick = null,
-                            enabled = supported
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = label,
-                                color = if (supported) {
-                                    MaterialTheme.colorScheme.onSurface
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                            )
-                            if (!supported) {
-                                Text(
-                                    text = unavailableHint,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(android.R.string.cancel))
-            }
-        }
-    )
-}
-
 // ============================================================================
 // Utility
 // ============================================================================
@@ -1145,14 +1084,5 @@ private fun openBatteryOptimizationSettings(context: Context) {
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(context, R.string.pref_battery_opt_unavailable, Toast.LENGTH_SHORT).show()
         }
-    }
-}
-
-private fun getCodecDisplayName(codec: String): String {
-    return when (codec.lowercase()) {
-        "opus" -> "Opus"
-        "flac" -> "FLAC"
-        "pcm" -> "PCM"
-        else -> codec
     }
 }

@@ -6,6 +6,9 @@ import com.sendspindroid.sendspin.PlaybackState as SyncPlaybackState
 import com.sendspindroid.sendspin.SendSpin
 import com.sendspindroid.sendspin.SyncAudioPlayer
 import com.sendspindroid.sendspin.SyncAudioPlayerCallback
+import com.sendspindroid.sendspin.audio.OutputPreparer
+import com.sendspindroid.sendspin.audio.OutputSetup
+import com.sendspindroid.sendspin.decoder.PcmConverter
 import com.sendspindroid.sendspin.decoder.AudioDecoder
 import com.sendspindroid.sendspin.decoder.AudioDecoderFactory
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
@@ -62,6 +65,12 @@ class SendSpinEngine(
                 maxQueueSamples = maxQueueSamples,
             )
         },
+    /**
+     * Sets the platform output up for each player's PCM format, just before
+     * the player is made: bit-perfect output to a USB DAC, where the host has
+     * it. Main thread.
+     */
+    private val prepareOutput: OutputPreparer = OutputPreparer.MIXER,
 ) {
 
     interface Listener {
@@ -285,14 +294,15 @@ class SendSpinEngine(
             releaseRetiredPlayers()
 
             // Reuse existing player if format matches (DAC timestamps stay warm)
+            val setup = prepareOutput.prepare(sampleRate, channels, bitDepth)
             val existingPlayer = player
-            if (existingPlayer != null && existingPlayer.matchesFormat(sampleRate, channels, bitDepth)) {
+            if (existingPlayer != null && existingPlayer.plays(sampleRate, channels, setup)) {
                 Log.i(TAG, "Reusing existing SyncAudioPlayer - DAC already warm")
                 existingPlayer.clearBuffer()
             } else {
                 // Format changed or no existing player - create new one
                 existingPlayer?.release()
-                createPlayer(sampleRate, channels, bitDepth)
+                createPlayer(sampleRate, channels, setup)
             }
         }
     }
@@ -302,6 +312,10 @@ class SendSpinEngine(
         sampleLead()
         return leadEstimator.snapshot()
     }
+
+    /** Whether the output being heard passes the audio to the device untouched. Main thread. */
+    val bitPerfect: Boolean
+        get() = hostPlayer?.isBitPerfect == true
 
     /** Decode errors since this engine was created. */
     val decodeErrorCount: Long
@@ -596,6 +610,7 @@ class SendSpinEngine(
             return
         }
         val out = player ?: return
+        val streamDepth = decoderStream?.bitDepth
         // Checked again, by the player under the lock its clear takes: a
         // stream/clear or stream/end that landed while this chunk was
         // decoding has cleared the player or is about to, and a chunk queued
@@ -608,15 +623,16 @@ class SendSpinEngine(
         // Stamped by the decoder, not with this chunk's time: what comes out
         // can be the previous chunk's audio.
         for (audio in decoded) {
+            val pcm = atOutputDepth(audio.pcm, streamDepth, out)
             // The server may run minutes ahead (buffer_capacity counts encoded
             // bytes), more than the capped decoded queue holds. Wait for room
             // so the backlog stays encoded in decodeChannel; a stream/clear or
             // stream/end bumps decodeGeneration and ends the wait.
-            val samples = (audio.pcm.size / out.bytesPerFrame).toLong()
+            val samples = (pcm.size / out.bytesPerFrame).toLong()
             while (t.generation == decodeGeneration && !out.hasRoomFor(samples)) {
                 delay(FORMAT_SWITCH_POLL_MS)
             }
-            out.queueChunk(audio.timestampUs, audio.pcm) { t.generation == decodeGeneration }
+            out.queueChunk(audio.timestampUs, pcm) { t.generation == decodeGeneration }
         }
     }
 
@@ -645,11 +661,13 @@ class SendSpinEngine(
         val out = player
         if (t.keepBuffered && current() && out != null) {
             val held = audioDecoder?.drain().orEmpty()
+            val heldDepth = decoderStream?.bitDepth
             Log.d(TAG, "Previous decoder handed back ${held.size} buffers (${held.sumOf { it.pcm.size }} bytes)")
             for (audio in held) {
-                val samples = (audio.pcm.size / out.bytesPerFrame).toLong()
+                val pcm = atOutputDepth(audio.pcm, heldDepth, out)
+                val samples = (pcm.size / out.bytesPerFrame).toLong()
                 while (current() && !out.hasRoomFor(samples)) delay(FORMAT_SWITCH_POLL_MS)
-                out.queueChunk(audio.timestampUs, audio.pcm, current)
+                out.queueChunk(audio.timestampUs, pcm, current)
             }
         }
 
@@ -706,14 +724,29 @@ class SendSpinEngine(
         // Its stream has ended or been replaced: the later stream/start set
         // up the output on this thread, ordered with this check
         if (t.epoch != streamEpoch.get()) return@withContext
+        val setup = prepareOutput.prepare(t.sampleRate, t.channels, t.bitDepth)
         val old = player
-        if (old != null && old.matchesFormat(t.sampleRate, t.channels, t.bitDepth)) return@withContext
+        if (old != null && old.plays(t.sampleRate, t.channels, setup)) return@withContext
         if (old != null) {
             Log.i(TAG, "Output format change on active stream - the previous output plays out its " +
                 "${old.getBufferedDurationMs()}ms beside the new one")
             retire(old)
         }
-        createPlayer(t.sampleRate, t.channels, t.bitDepth, announceNow = old == null)
+        createPlayer(t.sampleRate, t.channels, setup, announceNow = old == null)
+    }
+
+    /** Whether this player is the output [setup] asks for, for PCM at [sampleRate] and [channels]. */
+    private fun SyncAudioPlayer.plays(sampleRate: Int, channels: Int, setup: OutputSetup): Boolean =
+        matchesFormat(sampleRate, channels, setup.bitDepth) && isBitPerfect == setup.bitPerfect
+
+    /**
+     * [pcm] of [streamDepth]-bit samples at the depth [out] plays at. That is
+     * the stream's own, except on a bit-perfect output that takes only wider
+     * samples, where each goes out with its bits at the top.
+     */
+    private fun atOutputDepth(pcm: ByteArray, streamDepth: Int?, out: SyncAudioPlayer): ByteArray {
+        val from = streamDepth?.let { PcmConverter.integerEncodingOf(it) } ?: return pcm
+        return if (out.bitDepth == streamDepth) pcm else PcmConverter.convert(pcm, from, out.bitDepth)
     }
 
     private fun handleDecodeFlush() {
@@ -730,7 +763,8 @@ class SendSpinEngine(
      * Creates and starts a [SyncAudioPlayer] for the given PCM format. Main
      * thread. Without [announceNow] the host is given it once it plays.
      */
-    private fun createPlayer(sampleRate: Int, channels: Int, bitDepth: Int, announceNow: Boolean = true) {
+    private fun createPlayer(sampleRate: Int, channels: Int, setup: OutputSetup, announceNow: Boolean = true) {
+        val bitDepth = setup.bitDepth
         val timeFilter = client?.getTimeFilter()
         if (timeFilter == null) {
             Log.e(TAG, "Cannot start audio: time filter not available")
@@ -770,12 +804,14 @@ class SendSpinEngine(
             setMuted(SyncAudioPlayer.MuteReason.INTERRUPTION, SyncAudioPlayer.MuteReason.INTERRUPTION in heldMutes)
             setMuted(SyncAudioPlayer.MuteReason.VOICE, SyncAudioPlayer.MuteReason.VOICE in heldMutes)
             setVolume(trackGain)
+            if (setup.bitPerfect) useBitPerfectOutput()
             initialize()
             start()
         }
         player = created
         if (announceNow) announce(created)
-        Log.i(TAG, "SyncAudioPlayer created: ${sampleRate}Hz, ${channels}ch, ${bitDepth}bit")
+        Log.i(TAG, "SyncAudioPlayer created: ${sampleRate}Hz, ${channels}ch, ${bitDepth}bit" +
+            if (setup.bitPerfect) ", bit-perfect" else "")
     }
 
     private companion object {

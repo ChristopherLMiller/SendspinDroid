@@ -4,9 +4,11 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Build
+import android.media.MediaCodec
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.util.Log
+import com.sendspindroid.sendspin.protocol.QualityStep
 import com.sendspindroid.sendspin.protocol.SendSpinProtocol
 import java.util.concurrent.ConcurrentHashMap
 
@@ -99,6 +101,61 @@ object AudioDecoderFactory {
         }
 
         return depths.sorted()
+    }
+
+    /**
+     * The steps of the quality ladder this device plays at the default rate.
+     * PCM 16 is always among them. FLAC 24 needs both a 24-bit output and a
+     * FLAC decoder that hands back more than 16 bits
+     * ([isHighResFlacDecodeSupported]). Low memory mode keeps every codec at
+     * 16-bit, as it does PCM.
+     */
+    fun supportedQualitySteps(lowMemoryMode: Boolean): Set<QualityStep> {
+        val outputDepths = if (lowMemoryMode) listOf(16) else getSupportedPcmBitDepths()
+        return QualityStep.entries.filterTo(mutableSetOf()) { step ->
+            when (step.codec) {
+                "pcm" -> step.bitDepth in outputDepths
+                "flac" -> isCodecSupported("flac") && (step.bitDepth == 16 ||
+                    (step.bitDepth in outputDepths && isHighResFlacDecodeSupported()))
+                else -> isCodecSupported(step.codec)
+            }
+        }
+    }
+
+    // Asked once: the probe creates a decoder.
+    @Volatile
+    private var highResFlacProbe: Boolean? = null
+
+    /**
+     * Whether this device's FLAC decoder hands back more than 16 bits a
+     * sample. The platform decoders put out 16-bit PCM unless asked for
+     * float, and float keeps every bit of a 24-bit stream. Found by
+     * configuring the decoder [FlacDecoder] uses for float output and reading
+     * back the encoding it will put out.
+     */
+    fun isHighResFlacDecodeSupported(): Boolean =
+        highResFlacProbe ?: probeHighResFlac().also { highResFlacProbe = it }
+
+    private fun probeHighResFlac(): Boolean {
+        if (!isCodecSupported("flac")) return false
+        var codec: MediaCodec? = null
+        return try {
+            val format = MediaFormat.createAudioFormat(
+                MediaFormat.MIMETYPE_AUDIO_FLAC, SendSpinProtocol.AudioFormat.SAMPLE_RATE, 2
+            )
+            format.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_FLOAT)
+            codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_FLAC)
+            codec.configure(format, null, null, 0)
+            val encoding = MediaCodecDecoder.pcmEncodingOf(codec.outputFormat)
+            val highRes = (PcmConverter.bytesPerSample(encoding) ?: 0) > 2
+            Log.i(TAG, "FLAC decoder ${codec.name} asked for float puts out encoding $encoding (high-res: $highRes)")
+            highRes
+        } catch (e: Exception) {
+            Log.i(TAG, "FLAC decoder cannot put out float, FLAC stays at 16-bit: ${e.message}")
+            false
+        } finally {
+            codec?.release()
+        }
     }
 
     // A probe opens real audio tracks and decoder lookups, so each answer is

@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.sendspindroid.R
+import com.sendspindroid.model.kiloHertz
 import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
 import com.sendspindroid.ui.adaptive.TvInitialFocus
@@ -324,6 +325,29 @@ fun StatsContent(
         )
         StatRow(stringResource(R.string.stats_roles), rolesLabel(state.activeRoles))
         StatRow(stringResource(R.string.stats_stream), streamLabel(state))
+        if (state.requestedCodec != null) {
+            // Marked when the stream is in another format than the one asked for
+            val mismatch = state.streamSampleRate > 0 &&
+                (!state.audioCodec.equals(state.requestedCodec, ignoreCase = true) ||
+                    state.streamBitDepth != state.requestedBitDepth ||
+                    state.streamSampleRate != state.requestedSampleRate)
+            StatRow(
+                stringResource(R.string.stats_asked_for),
+                askedForLabel(state),
+                if (mismatch) ColorWarning else null,
+            )
+        }
+        if (state.bitPerfectUsb) {
+            StatRow(
+                stringResource(R.string.stats_output),
+                if (state.outputBitPerfect) {
+                    stringResource(R.string.stats_output_bit_perfect, kiloHertz(state.outputSampleRate), state.outputBitDepth)
+                } else {
+                    stringResource(R.string.stats_output_mixer)
+                },
+                if (state.outputBitPerfect) ColorGood else ColorWarning,
+            )
+        }
         if (state.lastByteReceivedAgoMs >= 0) {
             StatRow(
                 stringResource(R.string.stats_last_message),
@@ -360,7 +384,7 @@ fun StatsContent(
         }
 
         // === RECONNECTS: only when there has been one ===
-        val episodes = handoffEpisodeLines(state.handoffEpisodes)
+        val episodes = summaryLines(state.handoffEpisodes)
         if (episodes.isNotEmpty()) {
             SectionDivider()
             SectionHeader(stringResource(R.string.stats_section_reconnects))
@@ -373,6 +397,27 @@ fun StatsContent(
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
             }
+        }
+
+        // === CODEC CHANGES: only when there has been one ===
+        val codecChanges = summaryLines(state.codecChanges)
+        if (codecChanges.isNotEmpty()) {
+            SectionDivider()
+            SectionHeader(stringResource(R.string.stats_section_codec_changes))
+            StatRow(
+                stringResource(R.string.stats_codec_upgrades_downgrades),
+                "${state.codecUpgrades} / ${state.codecDowngrades}",
+            )
+            codecChanges.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = codecChangeLineColor(line) ?: MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+            }
+            SectionNote(stringResource(R.string.stats_codec_changes_note))
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -460,7 +505,7 @@ private fun rolesLabel(roles: List<String>): String =
 /** "OPUS 48 kHz 16-bit stereo", or just the codec while no stream is active. */
 private fun streamLabel(state: StatsState): String {
     if (state.streamSampleRate <= 0) return state.audioCodec
-    val rate = String.format("%.4g", state.streamSampleRate / 1000.0).trimEnd('0').trimEnd('.')
+    val rate = kiloHertz(state.streamSampleRate)
     val channels = when (state.streamChannels) {
         1 -> "mono"
         2 -> "stereo"
@@ -469,8 +514,30 @@ private fun streamLabel(state: StatsState): String {
     return "${state.audioCodec} $rate kHz ${state.streamBitDepth}-bit $channels"
 }
 
-/** Episode lines from the recorder's summary, dropping its header / empty marker. */
-private fun handoffEpisodeLines(summary: String?): List<String> =
+/**
+ * "FLAC 48 kHz 24-bit (Normal on Wi-Fi)": the format the connection asks
+ * for, and the quality setting it comes from.
+ */
+@Composable
+private fun askedForLabel(state: StatsState): String {
+    val format = "${state.requestedCodec} ${kiloHertz(state.requestedSampleRate)} kHz ${state.requestedBitDepth}-bit"
+    val quality = when (state.audioQuality) {
+        "LOW" -> stringResource(R.string.pref_audio_quality_low)
+        "NORMAL" -> stringResource(R.string.pref_audio_quality_normal)
+        "HIGH" -> stringResource(R.string.pref_audio_quality_high)
+        else -> return format
+    }
+    val network = stringResource(
+        if (state.audioQualityMobileData) R.string.stats_network_mobile_data else R.string.stats_network_wifi
+    )
+    return "$format (${stringResource(R.string.stats_asked_for_reason, quality, network)})"
+}
+
+/**
+ * The lines of a recorder's summary (handoff episodes, codec changes),
+ * dropping its header / empty marker.
+ */
+private fun summaryLines(summary: String?): List<String> =
     summary?.lineSequence()
         ?.map { it.trim() }
         ?.filter { it.isNotEmpty() && !it.startsWith("---") && !it.startsWith("(no ") }
@@ -481,6 +548,13 @@ private fun handoffLineColor(line: String): Color = when {
     line.contains("RECOVERED") -> ColorGood
     line.contains("EXHAUSTED") -> ColorBad
     else -> ColorWarning
+}
+
+/** Up the ladder is good, down it a warning; a change that is neither is not marked. */
+private fun codecChangeLineColor(line: String): Color? = when {
+    line.contains(" DOWNGRADE ") -> ColorWarning
+    line.contains(" UPGRADE ") -> ColorGood
+    else -> null
 }
 
 @Composable

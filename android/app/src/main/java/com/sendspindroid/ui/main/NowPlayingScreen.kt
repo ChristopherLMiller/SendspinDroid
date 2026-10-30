@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,6 +52,8 @@ import com.sendspindroid.sendspin.pairing.PairingCodeFormat
 import com.sendspindroid.sendspin.protocol.AdmissionState
 import com.sendspindroid.ui.settings.unfinishedMessage
 import com.sendspindroid.model.AppConnectionState
+import com.sendspindroid.playback.PlaybackService
+import com.sendspindroid.sendspin.protocol.StreamFormat
 import com.sendspindroid.ui.adaptive.AdaptiveDefaults
 import com.sendspindroid.ui.adaptive.FormFactor
 import com.sendspindroid.ui.adaptive.LocalFormFactor
@@ -63,6 +66,7 @@ import com.sendspindroid.ui.adaptive.rememberFocusFallback
 import com.sendspindroid.ui.adaptive.tvFocusRing
 import com.sendspindroid.ui.main.components.AlbumArtCard
 import com.sendspindroid.ui.main.components.ConnectionProgress
+import com.sendspindroid.ui.main.components.GroupAndFormatLine
 import com.sendspindroid.ui.main.components.PlaybackControls
 import com.sendspindroid.ui.main.components.ReconnectingBanner
 import com.sendspindroid.ui.main.components.TrackProgressBar
@@ -112,6 +116,7 @@ fun NowPlayingScreen(
     val pairingCode by viewModel.pairingCode.collectAsStateWithLifecycle()
     val pairingGestureRequested by viewModel.pairingGestureRequested.collectAsStateWithLifecycle()
     val lastPairingOutcome by PairedServers.lastOutcome.collectAsStateWithLifecycle()
+    val streamFormat by PlaybackService.streamFormat.collectAsStateWithLifecycle()
 
     // Don't show buffering spinner when paused -- SendSpin's audio stream stops on
     // pause, so Media3 reports STATE_BUFFERING even though the user intentionally paused.
@@ -192,6 +197,7 @@ fun NowPlayingScreen(
                 NowPlayingHeadUnit(
                     metadata = metadata,
                     groupName = groupName,
+                    streamFormat = streamFormat,
                     artworkSource = artworkSource,
                     isBuffering = isBuffering,
                     isPlaying = isPlaying,
@@ -213,6 +219,7 @@ fun NowPlayingScreen(
                     metadata = metadata,
                     albumArtist = albumArtist,
                     groupName = groupName,
+                    streamFormat = streamFormat,
                     artworkSource = artworkSource,
                     isBuffering = isBuffering,
                     isPlaying = isPlaying,
@@ -235,6 +242,7 @@ fun NowPlayingScreen(
                     metadata = metadata,
                     albumArtist = albumArtist,
                     groupName = groupName,
+                    streamFormat = streamFormat,
                     artworkSource = artworkSource,
                     isBuffering = isBuffering,
                     isPlaying = isPlaying,
@@ -263,6 +271,7 @@ fun NowPlayingScreen(
                     metadata = metadata,
                     albumArtist = albumArtist,
                     groupName = groupName,
+                    streamFormat = streamFormat,
                     artworkSource = artworkSource,
                     isBuffering = isBuffering,
                     isPlaying = isPlaying,
@@ -320,6 +329,7 @@ private fun NowPlayingPortrait(
     metadata: TrackMetadata,
     albumArtist: String? = null,
     groupName: String,
+    streamFormat: StreamFormat? = null,
     artworkSource: ArtworkSource?,
     isBuffering: Boolean,
     isPlaying: Boolean,
@@ -417,16 +427,14 @@ private fun NowPlayingPortrait(
                 )
             }
 
-            // Group Name
-            if (groupName.isNotEmpty()) {
+            // Group Name and the stream's format
+            if (groupName.isNotEmpty() || streamFormat != null) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = stringResource(R.string.group_label, groupName),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                GroupAndFormatLine(
+                    groupName = groupName,
+                    streamFormat = streamFormat,
+                    groupStyle = MaterialTheme.typography.labelMedium,
+                    formatStyle = MaterialTheme.typography.labelSmall
                 )
             }
 
@@ -490,6 +498,7 @@ private fun NowPlayingLandscape(
     metadata: TrackMetadata,
     albumArtist: String? = null,
     groupName: String,
+    streamFormat: StreamFormat? = null,
     artworkSource: ArtworkSource?,
     isBuffering: Boolean,
     isPlaying: Boolean,
@@ -587,16 +596,14 @@ private fun NowPlayingLandscape(
                     )
                 }
 
-                // Group Name
-                if (groupName.isNotEmpty()) {
+                // Group Name and the stream's format
+                if (groupName.isNotEmpty() || streamFormat != null) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.group_label, groupName),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    GroupAndFormatLine(
+                        groupName = groupName,
+                        streamFormat = streamFormat,
+                        groupStyle = MaterialTheme.typography.labelMedium,
+                        formatStyle = MaterialTheme.typography.labelSmall
                     )
                 }
 
@@ -662,6 +669,7 @@ private fun NowPlayingTv(
     metadata: TrackMetadata,
     albumArtist: String? = null,
     groupName: String,
+    streamFormat: StreamFormat? = null,
     artworkSource: ArtworkSource?,
     isBuffering: Boolean,
     isPlaying: Boolean,
@@ -769,16 +777,17 @@ private fun NowPlayingTv(
                     )
                 }
 
-                // Group Name
-                if (groupName.isNotEmpty()) {
+                // Group Name and the stream's format
+                if (groupName.isNotEmpty() || streamFormat != null) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.group_label, groupName),
-                        fontSize = AdaptiveDefaults.captionTextSize(formFactor),
-                        color = MaterialTheme.colorScheme.primary,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    val captionStyle = LocalTextStyle.current.copy(
+                        fontSize = AdaptiveDefaults.captionTextSize(formFactor)
+                    )
+                    GroupAndFormatLine(
+                        groupName = groupName,
+                        streamFormat = streamFormat,
+                        groupStyle = captionStyle,
+                        formatStyle = captionStyle
                     )
                 }
 

@@ -65,6 +65,13 @@ Bytes 13+:   Encoded audio frame
 ### Audio Format
 - 48kHz default sample rate; PCM and FLAC also offer the candidate rates in `SendSpinProtocol.AudioFormat.SUPPORTED_SAMPLE_RATES` (up to 768kHz), filtered at connect by `AudioDecoderFactory` probing the device output and FLAC decoder (Opus stays at 48kHz). Buffers are capped in bytes (`SendSpinProtocol.Buffer`)
 - 16-bit, 24-bit, or 32-bit signed PCM (negotiated via client hello)
+- Quality ladder (`QualityLadder`, shared): Opus, FLAC 16, FLAC 24, PCM 16, 24, 32, all at 48kHz.
+  Settings has one Low/Normal/High choice for Wi-Fi and one for mobile data (Opus/FLAC/PCM); each
+  resolves to the highest step of its codec the device plays (`AudioDecoderFactory.supportedQualitySteps`).
+  The hello lists every supported step, the chosen one first. A setting change into another codec reconnects
+  for a new hello: Music Assistant picks each session's rate and depth (following the track's native rate)
+  from the hello's first codec, and that outranks `format`. Within a codec, `format` moves the stream without
+  a gap. FLAC 24 decodes via float output (`PcmConverter`)
 - Stereo (2 channels): only stereo is advertised, as a change of channel count
   needs a new AudioTrack and so cannot be gapless
 - Audio sample data is little-endian; header timestamps are big-endian
@@ -74,7 +81,7 @@ Reports client state to server:
 - `available`: boolean, true once the clock is synchronized
 - `player` (while the player role is active): `volume` 0-100, `muted`,
   `output_delay_ms`, `required_lead_time_ms`, `min_buffer_ms`,
-  `supported_commands`, and `format` when a codec preference overrides the
+  `supported_commands`, and `format` when a quality change overrides the
   hello's order
 - `artwork` (while the artwork role is active): the channel configuration
 
@@ -87,6 +94,13 @@ Key modules:
 - **Clock Sync** - 2D Kalman time filter (`SendspinTimeFilter.kt`)
 - **Audio Buffer** - Timestamped chunk queue and state machine (`SyncAudioPlayer.kt`)
 - **Audio Output** - `AudioTrack` in `SyncAudioPlayer.kt` with DAC-aware start gating and sample insert/drop sync correction
+
+Bit-perfect USB output (opt-in setting, Android 14+): `UsbBitPerfect` sets the preferred mixer attributes
+(`MIXER_BEHAVIOR_BIT_PERFECT`) of media on the USB DAC for each player's format, through the engine's
+`OutputPreparer`, and the AudioTrack must then use that same `AudioFormat`. Narrower audio goes out in the DAC's
+wider slots (24-bit in 32), bits at the top. Android applies no volume there, so `SyncAudioPlayer` leaves the
+track at unity and applies the gain and mutes to the samples (untouched at full volume). While a DAC offers it,
+the hello offers rates other than 48kHz only where it plays them bit-perfect; a change of DAC reconnects.
 
 AAudio/Oboe would provide callback-precise hardware latency and lower-latency writes, and is a **possible future migration** — but is not the currently shipped path. Code and docs should describe `AudioTrack` as the present audio output.
 
