@@ -56,4 +56,30 @@ class FlacDecoderTest {
 
         assertFalse(integers.containsKey(MediaFormat.KEY_PCM_ENCODING))
     }
+
+    @Test
+    fun `the decoder's input buffers take the largest frame the stream can carry`() {
+        // The codec header Music Assistant sends a 96 kHz 24-bit stream with:
+        // "fLaC", then a STREAMINFO of 8192-sample blocks and frames up to
+        // 50202 bytes, past the platform decoder's own 32 KB
+        val streamInfo = listOf(
+            0x20, 0x00, 0x20, 0x00,  // block sizes, least and most
+            0x00, 0x00, 0x00,        // least frame size, not known
+            0x00, 0xC4, 0x1A,        // most frame size
+            0x17, 0x70, 0x03, 0x70,  // 96000 Hz, 2 channels, 24 bits
+        ) + List(20) { 0 }
+        val header = (listOf(0x66, 0x4C, 0x61, 0x43, 0x80, 0x00, 0x00, 0x22) + streamInfo)
+            .map { it.toByte() }.toByteArray()
+
+        FlacDecoder().configure(sampleRate = 96_000, channels = 2, bitDepth = 24, codecHeader = header)
+
+        assertEquals(50_202, integers[MediaFormat.KEY_MAX_INPUT_SIZE])
+    }
+
+    @Test
+    fun `without a STREAMINFO to read the decoder keeps its own input buffer size`() {
+        FlacDecoder().configure(sampleRate = 48000, channels = 2, bitDepth = 16, codecHeader = ByteArray(34))
+
+        assertFalse(integers.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE))
+    }
 }

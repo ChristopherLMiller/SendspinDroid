@@ -52,6 +52,12 @@ class FlacDecoder : MediaCodecDecoder(MediaFormat.MIMETYPE_AUDIO_FLAC) {
         if (bitDepth > 16) {
             format.setInteger(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_FLOAT)
         }
+        // Input buffers with room for the largest frame the stream can carry.
+        // The platform decoder's own are 32 KB, which 24-bit stereo outgrows
+        // from 88.2 kHz up: Music Assistant codes blocks of about 100 ms,
+        // 8192 samples at 96 kHz, up to 50 KB a frame.
+        val maxFrameBytes = FlacFrames.maxFrameBytes(codecHeader)
+        if (maxFrameBytes > 0) format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxFrameBytes)
     }
 
     /**

@@ -446,4 +446,98 @@ class MediaCodecDecoderTest {
         // +/-0.5 at 24 bits, packed little-endian: 0x400000 and -0x400000
         assertArrayEquals(byteArrayOf(0x00, 0x00, 0x40, 0x00, 0x00, 0xC0.toByte()), pcm)
     }
+
+    // =========================================================================
+    // Every input buffer taken goes back to the codec
+    // =========================================================================
+
+    // What was set on each format configure made, in turn
+    private val formatIntegers = mutableListOf<MutableMap<String, Int>>()
+
+    /** Configure [decoder], having it make [codecs] in turn. */
+    private fun configureWith(vararg codecs: MediaCodec) {
+        mockkStatic(MediaFormat::class)
+        every { MediaFormat.createAudioFormat(any(), any(), any()) } answers {
+            val integers = mutableMapOf<String, Int>()
+            formatIntegers += integers
+            mockk<MediaFormat>(relaxed = true) {
+                every { setInteger(any(), any()) } answers { integers[firstArg()] = secondArg() }
+            }
+        }
+        mockkStatic(MediaCodec::class)
+        every { MediaCodec.createDecoderByType(any()) } returnsMany codecs.toList()
+        decoder.configure(sampleRate = 96_000, channels = 2, bitDepth = 24, codecHeader = null)
+    }
+
+    /** A codec whose input buffer is [capacity] bytes, and that hands an end of stream straight back. */
+    private fun codecWithInputBuffer(index: Int, capacity: Int): MediaCodec = mockk(relaxed = true) {
+        every { dequeueInputBuffer(any()) } returns index
+        every { getInputBuffer(index) } returns ByteBuffer.allocate(capacity)
+        every { getOutputBuffer(any()) } returns ByteBuffer.allocate(0)
+        every { dequeueOutputBuffer(any(), any()) } answers {
+            firstArg<MediaCodec.BufferInfo>().flags = MediaCodec.BUFFER_FLAG_END_OF_STREAM
+            0
+        }
+    }
+
+    @Test
+    fun decode_frameLargerThanTheInputBuffers_setsTheCodecUpAgainWithRoomForIt() {
+        // A 96 kHz 24-bit FLAC frame, past the platform decoder's 32 KB
+        val small = codecWithInputBuffer(index = 0, capacity = 32_768)
+        val large = mockk<MediaCodec>(relaxed = true) {
+            every { dequeueInputBuffer(any()) } returns 1
+            every { getInputBuffer(1) } returns ByteBuffer.allocate(53_289)
+            every { dequeueOutputBuffer(any(), any()) } returns MediaCodec.INFO_TRY_AGAIN_LATER
+        }
+        configureWith(small, large)
+
+        decoder.decode(ByteArray(35_526), 5_000L)
+
+        // The buffer too small for it went back, as the end of the stream: one
+        // kept is lost to the codec, and losing them all stopped it for good
+        verify { small.queueInputBuffer(0, 0, 0, any(), MediaCodec.BUFFER_FLAG_END_OF_STREAM) }
+        verify { small.release() }
+        assertEquals(35_526 + 35_526 / 2, formatIntegers[1][MediaFormat.KEY_MAX_INPUT_SIZE])
+        verify(exactly = 1) { large.queueInputBuffer(1, 0, 35_526, 5_000L, 0) }
+    }
+
+    @Test
+    fun decode_frameTheCodecWillNotMakeRoomFor_givesTheBufferBackAndThrows() {
+        val small = codecWithInputBuffer(index = 0, capacity = 32_768)
+        val stillSmall = mockk<MediaCodec>(relaxed = true) {
+            every { dequeueInputBuffer(any()) } returns 1
+            every { getInputBuffer(1) } returns ByteBuffer.allocate(32_768)
+            every { dequeueOutputBuffer(any(), any()) } returns MediaCodec.INFO_TRY_AGAIN_LATER
+        }
+        configureWith(small, stillSmall)
+
+        assertThrows(IllegalStateException::class.java) { decoder.decode(ByteArray(35_526), 0L) }
+
+        // Given back empty, and set up again just the once
+        verify { stillSmall.queueInputBuffer(1, 0, 0, any(), 0) }
+        verify(exactly = 2) { MediaCodec.createDecoderByType(any()) }
+    }
+
+    @Test
+    fun decode_codecThatTakesNoInputFrameAfterFrame_throwsSoItIsSetUpAgain() {
+        every { mockCodec.dequeueInputBuffer(any()) } returns -1
+        every { mockCodec.dequeueOutputBuffer(any(), any()) } returns MediaCodec.INFO_TRY_AGAIN_LATER
+
+        decoder.decode(ByteArray(10), 0L)
+        decoder.decode(ByteArray(10), 0L)
+
+        assertThrows(IllegalStateException::class.java) { decoder.decode(ByteArray(10), 0L) }
+    }
+
+    @Test
+    fun decode_aFrameTakenStartsTheCountOfFramesRefusedOver() {
+        every { mockCodec.getInputBuffer(0) } returns ByteBuffer.allocate(1024)
+        every { mockCodec.dequeueOutputBuffer(any(), any()) } returns MediaCodec.INFO_TRY_AGAIN_LATER
+        // Four attempts for each frame refused: two refused, one taken, two refused
+        every { mockCodec.dequeueInputBuffer(any()) } returnsMany List(8) { -1 } + 0 + List(8) { -1 }
+
+        repeat(5) { decoder.decode(ByteArray(10), 0L) }
+
+        verify(exactly = 1) { mockCodec.queueInputBuffer(0, 0, 10, 0L, 0) }
+    }
 }

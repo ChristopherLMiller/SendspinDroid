@@ -3,7 +3,8 @@ package com.sendspindroid.sendspin.decoder
 /**
  * A FLAC chunk carries "one or more complete FLAC frames" (roles/player/v1.md,
  * "Codec framing"), and the platform decoder takes one frame per input buffer.
- * This finds the frames in a chunk.
+ * This finds the frames in a chunk, and from the stream's STREAMINFO how large
+ * one can be.
  *
  * A frame starts with a header (a sync code, and a CRC-8 over the header) and
  * ends with a CRC-16 over the whole frame. A frame boundary is taken only
@@ -46,6 +47,65 @@ object FlacFrames {
         frames += Frame(chunk.copyOfRange(start, chunk.size), timestampUs + samples * 1_000_000L / sampleRate)
         return frames
     }
+
+    /**
+     * The largest frame a stream can carry, in bytes, from the STREAMINFO in
+     * its [codecHeader], or 0 when that has none to read. It is the
+     * STREAMINFO's maximum frame size where it gives one, and never less
+     * than its largest block coded verbatim: an encoder falls back to that
+     * when compressing would make a frame larger, so no frame is bigger.
+     * The header is the start of a FLAC stream ("fLaC", then the STREAMINFO
+     * block, as Music Assistant sends it), the block alone, or its body.
+     */
+    fun maxFrameBytes(codecHeader: ByteArray?): Int {
+        val h = codecHeader ?: return 0
+        val p = streamInfoAt(h)
+        if (p < 0) return 0
+        val maxBlockSize = u16(h, p + 2)
+        // A block is 16 samples at the least: less is not a STREAMINFO
+        if (maxBlockSize < 16) return 0
+        val maxFrameSize = u24(h, p + 7)
+        val channels = ((h[p + 12].toInt() shr 1) and 0x07) + 1
+        val bitsPerSample = (((h[p + 12].toInt() and 0x01) shl 4) or ((h[p + 13].toInt() shr 4) and 0x0F)) + 1
+        // A frame size past the largest block there can be is no size at all
+        return maxOf(maxFrameSize, verbatimFrameBytes(maxBlockSize, channels, bitsPerSample))
+            .coerceAtMost(verbatimFrameBytes(MAX_BLOCK_SIZE, channels, bitsPerSample))
+    }
+
+    /**
+     * The size of a frame of [blockSize] samples coded verbatim, as FFmpeg's
+     * encoder bounds its frames: the frame header (16 bytes at the most), a
+     * header for each subframe, every sample at full depth (one bit more in
+     * a stereo side channel), and the CRC-16.
+     */
+    internal fun verbatimFrameBytes(blockSize: Int, channels: Int, bitsPerSample: Int): Int {
+        val sampleBits = if (channels == 2) {
+            (2L * bitsPerSample + 1) * blockSize
+        } else {
+            channels.toLong() * bitsPerSample * blockSize
+        }
+        return (16 + channels * ((bitsPerSample + 14) / 8) + (sampleBits + 7) / 8 + 2).toInt()
+    }
+
+    private const val STREAMINFO_BYTES = 34
+    private const val MAX_BLOCK_SIZE = 65_535
+
+    /** Where the body of the STREAMINFO in [h] starts, or -1. */
+    private fun streamInfoAt(h: ByteArray): Int = when {
+        h.size >= 8 + STREAMINFO_BYTES && h[0] == 'f'.code.toByte() && h[1] == 'L'.code.toByte() &&
+            h[2] == 'a'.code.toByte() && h[3] == 'C'.code.toByte() -> if (isStreamInfoBlock(h, 4)) 8 else -1
+        h.size >= 4 + STREAMINFO_BYTES && isStreamInfoBlock(h, 0) -> 4
+        h.size == STREAMINFO_BYTES -> 0
+        else -> -1
+    }
+
+    // A metadata block header: the last-block flag and type 0, then the length
+    private fun isStreamInfoBlock(h: ByteArray, p: Int): Boolean =
+        h[p].toInt() and 0x7F == 0 && u24(h, p + 1) >= STREAMINFO_BYTES
+
+    private fun u16(b: ByteArray, p: Int): Int = ((b[p].toInt() and 0xFF) shl 8) or (b[p + 1].toInt() and 0xFF)
+
+    private fun u24(b: ByteArray, p: Int): Int = ((b[p].toInt() and 0xFF) shl 16) or u16(b, p + 1)
 
     // The header (at least 6 bytes) and the CRC-16 footer
     private const val MIN_FRAME_BYTES = 8

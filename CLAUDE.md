@@ -72,6 +72,10 @@ Bytes 13+:   Encoded audio frame
   for a new hello: Music Assistant picks each session's rate and depth (following the track's native rate)
   from the hello's first codec, and that outranks `format`. Within a codec, `format` moves the stream without
   a gap. FLAC 24 decodes via float output (`PcmConverter`)
+- FLAC decoder input buffers are sized from the STREAMINFO (`FlacFrames.maxFrameBytes`): the platform
+  decoder's own 32 KB is too small for 24-bit stereo from 88.2kHz up. `MediaCodecDecoder` queues back every
+  input buffer it takes (a kept one is lost to the codec, and with all four lost it decodes nothing more),
+  and makes the codec again with more room for a frame that still does not fit
 - Stereo (2 channels): only stereo is advertised, as a change of channel count
   needs a new AudioTrack and so cannot be gapless
 - Audio sample data is little-endian; header timestamps are big-endian

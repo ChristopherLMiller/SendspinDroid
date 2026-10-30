@@ -21,6 +21,11 @@ import java.nio.ByteBuffer
  * What the codec hands back is converted to the stream's bit depth, from
  * the encoding its output format names (see [PcmConverter]): a FLAC decoder
  * asked for high-resolution output puts out float.
+ *
+ * Every input buffer taken from the codec goes back to it queued, empty if
+ * need be: one that does not is lost to it for good, and a codec that has
+ * lost them all takes nothing more. A frame larger than the codec's input
+ * buffers gets the codec made again with room for it.
  */
 abstract class MediaCodecDecoder(
     protected val mimeType: String
@@ -37,6 +42,10 @@ abstract class MediaCodecDecoder(
          * the codec time to free a buffer by processing output.
          */
         private const val MAX_INPUT_RETRIES = 3
+
+        // Frames in a row a codec may take no input for before it counts as
+        // stuck: decode then throws, and the engine sets up a new one
+        private const val MAX_REFUSED_FRAMES = 3
 
         // How long drain() waits for the codec to hand back what it holds
         private const val DRAIN_TIMEOUT_NS = 100_000_000L
@@ -57,6 +66,18 @@ abstract class MediaCodecDecoder(
     // The bit depth the stream plays at, which the output is converted to
     private var streamBitDepth = SendSpinProtocol.AudioFormat.BIT_DEPTH
 
+    // The stream as configure was given it, to make the codec again from
+    private var stream: Stream? = null
+
+    // The input buffer size asked for since a frame did not fit, or 0 for
+    // what configureFormat asks
+    private var inputRoom = 0
+
+    // Frames in a row the codec has taken no input for
+    private var refusedFrames = 0
+
+    private class Stream(val sampleRate: Int, val channels: Int, val bitDepth: Int, val codecHeader: ByteArray?)
+
     override val isConfigured: Boolean
         get() = _isConfigured
 
@@ -67,12 +88,22 @@ abstract class MediaCodecDecoder(
         codecHeader: ByteArray?
     ) {
         streamBitDepth = bitDepth
+        stream = Stream(sampleRate, channels, bitDepth, codecHeader)
+        inputRoom = 0
+        refusedFrames = 0
+        createCodec()
+    }
+
+    /** Create, configure and start the codec for [stream]. */
+    private fun createCodec() {
+        val s = stream ?: throw IllegalStateException("Decoder not configured")
         try {
             // Create base MediaFormat
-            val format = MediaFormat.createAudioFormat(mimeType, sampleRate, channels)
+            val format = MediaFormat.createAudioFormat(mimeType, s.sampleRate, s.channels)
 
             // Apply codec-specific configuration (template method)
-            configureFormat(format, sampleRate, channels, bitDepth, codecHeader)
+            configureFormat(format, s.sampleRate, s.channels, s.bitDepth, s.codecHeader)
+            if (inputRoom > 0) format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, inputRoom)
 
             // Create and configure decoder
             mediaCodec = MediaCodec.createDecoderByType(mimeType)
@@ -84,7 +115,7 @@ abstract class MediaCodecDecoder(
             mediaCodec?.start()
 
             _isConfigured = true
-            Log.d(TAG, "Decoder configured: $mimeType, ${sampleRate}Hz, ${channels}ch, ${bitDepth}bit " +
+            Log.d(TAG, "Decoder configured: $mimeType, ${s.sampleRate}Hz, ${s.channels}ch, ${s.bitDepth}bit " +
                 "(puts out encoding ${pcmEncodingOf(outputFormat)})")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to configure decoder", e)
@@ -108,7 +139,7 @@ abstract class MediaCodecDecoder(
     )
 
     override fun decode(compressedData: ByteArray, timestampUs: Long): List<DecodedAudio> {
-        val codec = mediaCodec
+        var codec = mediaCodec
             ?: throw IllegalStateException("Decoder not configured")
 
         val output = ArrayList<DecodedAudio>(1)
@@ -118,11 +149,12 @@ abstract class MediaCodecDecoder(
         // output to free slots, then retry. This prevents silent frame drops
         // that would corrupt stateful codecs like Opus.
         var submitted = false
-        for (attempt in 0..MAX_INPUT_RETRIES) {
+        var attempt = 0
+        while (attempt <= MAX_INPUT_RETRIES) {
             val inputIndex = codec.dequeueInputBuffer(TIMEOUT_US)
             if (inputIndex >= 0) {
                 val inputBuffer = codec.getInputBuffer(inputIndex)
-                if (inputBuffer != null) {
+                if (inputBuffer != null && inputBuffer.capacity() >= compressedData.size) {
                     inputBuffer.clear()
                     inputBuffer.put(compressedData)
                     // The codec hands this timestamp back on the output it
@@ -130,24 +162,72 @@ abstract class MediaCodecDecoder(
                     // still placed correctly.
                     codec.queueInputBuffer(inputIndex, 0, compressedData.size, timestampUs, 0)
                     submitted = true
+                    break
                 }
-                break
+                if (inputBuffer != null && compressedData.size > inputRoom && stream != null) {
+                    codec = setUpWithRoomFor(compressedData.size, codec, inputIndex, inputBuffer.capacity(), output)
+                    continue
+                }
+                // Given back empty: there is no buffer to fill, or the codec
+                // keeps its buffers smaller than it was asked to
+                codec.queueInputBuffer(inputIndex, 0, 0, timestampUs, 0)
+                if (inputBuffer == null) break
+                throw IllegalStateException(
+                    "A ${compressedData.size}-byte frame does not fit the decoder's " +
+                        "${inputBuffer.capacity()}-byte input buffers"
+                )
             }
 
             // No input buffer available -- drain output to free a slot, then retry.
             if (attempt < MAX_INPUT_RETRIES) {
                 drainOutput(codec, output)
             }
+            attempt++
         }
 
-        if (!submitted) {
+        if (submitted) {
+            refusedFrames = 0
+        } else {
             Log.e(TAG, "Failed to submit input after ${MAX_INPUT_RETRIES + 1} attempts, " +
                     "frame dropped (${compressedData.size} bytes)")
+            if (++refusedFrames >= MAX_REFUSED_FRAMES) {
+                refusedFrames = 0
+                throw IllegalStateException("The decoder took no input for $MAX_REFUSED_FRAMES frames in a row")
+            }
         }
 
         drainOutput(codec, output)
 
         return output
+    }
+
+    /**
+     * The codec made again with input buffers that take a frame of [size]
+     * bytes, in place of [old], whose buffer at [inputIndex] holds only
+     * [capacity]. That buffer goes back as the end of the stream, so the
+     * audio [old] still holds is collected into [output] before its release.
+     * Half as much room again as the frame takes, so one a little larger
+     * fits too.
+     */
+    private fun setUpWithRoomFor(
+        size: Int,
+        old: MediaCodec,
+        inputIndex: Int,
+        capacity: Int,
+        output: MutableList<DecodedAudio>
+    ): MediaCodec {
+        try {
+            old.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            collectToEndOfStream(old, output)
+        } catch (e: Exception) {
+            Log.w(TAG, "Error draining decoder", e)
+        }
+        inputRoom = size + size / 2
+        Log.w(TAG, "A $size-byte frame does not fit the decoder's $capacity-byte input buffers: " +
+            "setting it up again with $inputRoom")
+        release()
+        createCodec()
+        return mediaCodec ?: throw IllegalStateException("Decoder not configured")
     }
 
     /**
@@ -168,28 +248,36 @@ abstract class MediaCodecDecoder(
             }
             if (inputIndex < 0) return output
             codec.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-            val bufferInfo = MediaCodec.BufferInfo()
-            val deadline = System.nanoTime() + DRAIN_TIMEOUT_NS
-            while (System.nanoTime() < deadline) {
-                val outputIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
-                if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    outputFormat = codec.outputFormat
-                }
-                if (outputIndex < 0) continue
-                val outBuffer = codec.getOutputBuffer(outputIndex)
-                if (outBuffer != null && bufferInfo.size > 0) {
-                    val pcmData = ByteArray(bufferInfo.size)
-                    outBuffer.position(bufferInfo.offset)
-                    outBuffer.get(pcmData, 0, bufferInfo.size)
-                    output += DecodedAudio(bufferInfo.presentationTimeUs, toStreamPcm(pcmData))
-                }
-                codec.releaseOutputBuffer(outputIndex, false)
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
-            }
+            collectToEndOfStream(codec, output)
         } catch (e: Exception) {
             Log.w(TAG, "Error draining decoder", e)
         }
         return output
+    }
+
+    /**
+     * Collect [codec]'s output into [output], up to the end of stream it has
+     * been given or [DRAIN_TIMEOUT_NS].
+     */
+    private fun collectToEndOfStream(codec: MediaCodec, output: MutableList<DecodedAudio>) {
+        val bufferInfo = MediaCodec.BufferInfo()
+        val deadline = System.nanoTime() + DRAIN_TIMEOUT_NS
+        while (System.nanoTime() < deadline) {
+            val outputIndex = codec.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
+            if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                outputFormat = codec.outputFormat
+            }
+            if (outputIndex < 0) continue
+            val outBuffer = codec.getOutputBuffer(outputIndex)
+            if (outBuffer != null && bufferInfo.size > 0) {
+                val pcmData = ByteArray(bufferInfo.size)
+                outBuffer.position(bufferInfo.offset)
+                outBuffer.get(pcmData, 0, bufferInfo.size)
+                output += DecodedAudio(bufferInfo.presentationTimeUs, toStreamPcm(pcmData))
+            }
+            codec.releaseOutputBuffer(outputIndex, false)
+            if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+        }
     }
 
     /**

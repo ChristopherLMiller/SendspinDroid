@@ -179,4 +179,61 @@ class FlacFramesTest {
         assertEquals(1, frames.size)
         assertSame(chunk, frames[0].data)
     }
+
+    /** A STREAMINFO body (RFC 9639, section 8.2), its least block size the same as its most. */
+    private fun streamInfo(maxBlockSize: Int, maxFrameSize: Int, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {
+        val b = ByteArray(34)
+        for (p in intArrayOf(0, 2)) {
+            b[p] = (maxBlockSize shr 8).toByte()
+            b[p + 1] = maxBlockSize.toByte()
+        }
+        b[7] = (maxFrameSize shr 16).toByte()
+        b[8] = (maxFrameSize shr 8).toByte()
+        b[9] = maxFrameSize.toByte()
+        b[10] = (sampleRate shr 12).toByte()
+        b[11] = (sampleRate shr 4).toByte()
+        b[12] = (((sampleRate and 0x0F) shl 4) or ((channels - 1) shl 1) or ((bitsPerSample - 1) shr 4)).toByte()
+        b[13] = (((bitsPerSample - 1) and 0x0F) shl 4).toByte()
+        return b
+    }
+
+    // As Music Assistant sends it: the start of a stream, the STREAMINFO its last metadata block
+    private fun streamStart(info: ByteArray) = "fLaC".toByteArray() + byteArrayOf(0x80.toByte(), 0, 0, 34) + info
+
+    @Test
+    fun `the largest frame is read from the STREAMINFO Music Assistant sends`() {
+        // FFmpeg's encoder, 8192-sample blocks at 96 kHz 24-bit: its own bound
+        val info = streamInfo(maxBlockSize = 8192, maxFrameSize = 50_202, sampleRate = 96_000, channels = 2, bitsPerSample = 24)
+
+        assertEquals(50_202, FlacFrames.maxFrameBytes(streamStart(info)))
+    }
+
+    @Test
+    fun `a STREAMINFO that gives no frame size is bounded by its largest block coded verbatim`() {
+        val info = streamInfo(maxBlockSize = 8192, maxFrameSize = 0, sampleRate = 96_000, channels = 2, bitsPerSample = 24)
+
+        // The frame header, a header for each subframe, the samples (a side
+        // channel one bit deeper) and the CRC-16: 16 + 2 * 4 + 49 * 8192 / 8 + 2
+        assertEquals(50_202, FlacFrames.verbatimFrameBytes(8192, 2, 24))
+        assertEquals(50_202, FlacFrames.maxFrameBytes(info))
+        assertEquals(50_202, FlacFrames.maxFrameBytes(byteArrayOf(0, 0, 0, 34) + info))
+        assertEquals(50_202, FlacFrames.maxFrameBytes(streamStart(info)))
+    }
+
+    @Test
+    fun `a frame size no block could reach is capped`() {
+        val info = streamInfo(maxBlockSize = 4608, maxFrameSize = 0xFFFFFF, sampleRate = 48_000, channels = 2, bitsPerSample = 16)
+
+        assertEquals(FlacFrames.verbatimFrameBytes(65_535, 2, 16), FlacFrames.maxFrameBytes(streamStart(info)))
+    }
+
+    @Test
+    fun `a codec header with no STREAMINFO in it gives no size`() {
+        assertEquals(0, FlacFrames.maxFrameBytes(null))
+        assertEquals(0, FlacFrames.maxFrameBytes(ByteArray(10)))
+        // All zeros: blocks of no samples
+        assertEquals(0, FlacFrames.maxFrameBytes(ByteArray(34)))
+        // "fLaC" and a block that is not STREAMINFO
+        assertEquals(0, FlacFrames.maxFrameBytes("fLaC".toByteArray() + byteArrayOf(0x84.toByte(), 0, 0, 34) + ByteArray(34)))
+    }
 }
