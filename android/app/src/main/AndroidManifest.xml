@@ -257,6 +257,17 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!--
+            ArtworkProvider: the current track's artwork as a content:// URI.
+            Android Auto loads session artwork only from content:// URIs, not
+            from the server's http(s) URL. Exported so Auto's process can read
+            it; it serves only the cover already shown on the lock screen.
+        -->
+        <provider
+            android:name=".playback.ArtworkProvider"
+            android:authorities="${applicationId}.artwork"
+            android:exported="true" />
     </application>
 
     <!--

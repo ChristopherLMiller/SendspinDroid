@@ -31,9 +31,15 @@ import java.util.concurrent.CopyOnWriteArrayList
  * ```
  *
  * @param player The underlying ExoPlayer instance
+ * @param publishArtwork Serves the artwork's JPEG bytes at a `content://` URI
+ *   and returns it (see [ArtworkProvider]). That URI is the one the metadata
+ *   carries while there is artwork; without it, the server's URL is.
  */
 @UnstableApi
-class MetadataForwardingPlayer(player: Player) : ForwardingPlayer(player) {
+class MetadataForwardingPlayer(
+    player: Player,
+    private val publishArtwork: ((ByteArray) -> Uri)? = null
+) : ForwardingPlayer(player) {
 
     // Current metadata (updated from Go player callbacks)
     @Volatile
@@ -50,6 +56,10 @@ class MetadataForwardingPlayer(player: Player) : ForwardingPlayer(player) {
 
     @Volatile
     private var currentArtworkUri: Uri? = null
+
+    // Where publishArtwork serves currentArtworkData; null while there is none.
+    @Volatile
+    private var currentArtworkContentUri: Uri? = null
 
     @Volatile
     private var currentAlbumArtist: String? = null
@@ -121,14 +131,17 @@ class MetadataForwardingPlayer(player: Player) : ForwardingPlayer(player) {
 
         // Handle artwork bitmap
         if (artwork != null) {
-            currentArtworkData = ByteArrayOutputStream().use { stream ->
+            val jpeg = ByteArrayOutputStream().use { stream ->
                 artwork.compress(Bitmap.CompressFormat.JPEG, 90, stream)
                 stream.toByteArray()
             }
+            currentArtworkData = jpeg
+            currentArtworkContentUri = publishArtwork?.invoke(jpeg)
         } else if (clearArtwork) {
             // Explicitly clear artwork (new track has no artwork)
             currentArtworkData = null
             currentArtworkUri = null
+            currentArtworkContentUri = null
         }
 
         // Rebuild cached metadata
@@ -171,9 +184,11 @@ class MetadataForwardingPlayer(player: Player) : ForwardingPlayer(player) {
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
             .setIsPlayable(true)
             .apply {
-                // Set both artworkData (for notifications) and artworkUri (for Android Auto)
+                // artworkData is for the notification and lock screen. Android
+                // Auto reads artworkUri, and loads only a content:// one, so
+                // the served copy of the same image goes before the server's URL.
                 currentArtworkData?.let { setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER) }
-                currentArtworkUri?.let { setArtworkUri(it) }
+                (currentArtworkContentUri ?: currentArtworkUri)?.let { setArtworkUri(it) }
             }
             .build()
     }
@@ -187,6 +202,7 @@ class MetadataForwardingPlayer(player: Player) : ForwardingPlayer(player) {
         currentAlbum = null
         currentArtworkData = null
         currentArtworkUri = null
+        currentArtworkContentUri = null
         currentAlbumArtist = null
         currentYear = null
         currentTrackNumber = null

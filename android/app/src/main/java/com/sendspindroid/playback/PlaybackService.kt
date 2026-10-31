@@ -2972,7 +2972,9 @@ class PlaybackService : MediaLibraryService() {
             return
         }
 
-        forwardingPlayer = MetadataForwardingPlayer(player)
+        forwardingPlayer = MetadataForwardingPlayer(player) { jpeg ->
+            ArtworkProvider.publish(this, jpeg)
+        }
 
         // Create PendingIntent for notification tap - opens MainActivity
         val sessionActivityIntent = Intent(this, MainActivity::class.java).apply {
